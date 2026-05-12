@@ -1,8 +1,0 @@
-[
-  { "name": "Preço alto", "value": 32 },
-  { "name": "Sem orçamento", "value": 21 },
-  { "name": "Comprou com concorrente", "value": 18 },
-  { "name": "Não respondeu mais", "value": 15 },
-  { "name": "Apenas pesquisando", "value": 9 },
-  { "name": "Outros", "value": 5 }
-]

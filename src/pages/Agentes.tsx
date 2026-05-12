@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,11 +10,28 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useCRM } from "@/store/crm-store";
 import { Agent, MODEL_OPTIONS } from "@/lib/mock-data";
-import { Bot, Plus, Copy, Trash2, Pencil, Sparkles, Send, MessageSquare, CheckCircle2, PauseCircle, TestTube2, AlertTriangle } from "lucide-react";
+import { whatsappApi } from "@/lib/whatsapp-api";
+import { Bot, Plus, Copy, Trash2, Pencil, Sparkles, Send, MessageSquare, CheckCircle2, PauseCircle, TestTube2, AlertTriangle, Loader2, DollarSign, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
+
+const VALID_MODEL_IDS = MODEL_OPTIONS.map(o => o.id);
+const normalizeModel = (id: string | undefined): Agent["model"] =>
+  (VALID_MODEL_IDS as string[]).includes(id || "") ? (id as Agent["model"]) : "balanced";
+
+const formatUsd = (value: number) => {
+  if (!Number.isFinite(value) || value === 0) return "$0.0000";
+  if (value < 0.01) return `$${value.toFixed(4)}`;
+  return `$${value.toFixed(2)}`;
+};
+
+const formatTokens = (n: number) => {
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n < 1000) return String(n);
+  return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
+};
 
 const emptyAgent: Omit<Agent, "id" | "conversations" | "updatedAt"> = {
   name: "", description: "", prompt: "", model: "balanced", temperature: 0.7, active: true,
@@ -30,11 +48,17 @@ const AGENT_TEMPLATES = [
 ];
 
 export default function Agentes() {
-  const { agents, setAgents } = useCRM();
+  const { agents, setAgents, agentUsage, refreshAgentUsage, resetAgentUsage, conversationPatches, deals } = useCRM();
+  const navigate = useNavigate();
   const [editing, setEditing] = useState<Agent | null>(null);
   const [open, setOpen] = useState(false);
   const [testInput, setTestInput] = useState("");
   const [testOutput, setTestOutput] = useState("");
+  const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    refreshAgentUsage().catch(() => {});
+  }, [refreshAgentUsage]);
 
   const openNew = () => { setEditing({ ...emptyAgent, id: "new", conversations: 0, updatedAt: new Date().toISOString() } as Agent); setOpen(true); };
   const openTemplate = (template: typeof AGENT_TEMPLATES[number]) => {
@@ -49,7 +73,29 @@ export default function Agentes() {
     } as Agent);
     setOpen(true);
   };
-  const openEdit = (a: Agent) => { setEditing(a); setOpen(true); };
+  const openEdit = (a: Agent) => { setEditing({ ...a, model: normalizeModel(a.model) }); setOpen(true); };
+
+  const editingHistory = useMemo(() => {
+    if (!editing || editing.id === "new") return [];
+    const items: { conversationId: string; customer: string; lastInteraction?: string; dealId?: string }[] = [];
+    const seen = new Set<string>();
+    for (const [convId, patch] of Object.entries(conversationPatches)) {
+      const dealLinked = patch.dealId ? deals.find(d => d.id === patch.dealId) : undefined;
+      const matches = (dealLinked?.aiAgentId === editing.id) || (patch.aiAgentId === editing.id);
+      if (!matches) continue;
+      if (seen.has(convId)) continue;
+      seen.add(convId);
+      items.push({
+        conversationId: convId,
+        customer: patch.customer || dealLinked?.customer || convId,
+        lastInteraction: dealLinked?.lastInteraction,
+        dealId: dealLinked?.id,
+      });
+    }
+    return items.sort((a, b) => (b.lastInteraction || "").localeCompare(a.lastInteraction || ""));
+  }, [editing, conversationPatches, deals]);
+
+  const editingUsage = editing && editing.id !== "new" ? agentUsage[editing.id] : undefined;
 
   const save = () => {
     if (!editing) return;
@@ -69,13 +115,31 @@ export default function Agentes() {
     toast.success("Agente duplicado");
   };
   const remove = (id: string) => { setAgents(prev => prev.filter(a => a.id !== id)); toast.success("Agente removido"); };
-  const runTest = () => {
-    if (!testInput.trim()) return;
+  const runTest = async () => {
+    if (!editing) return;
+    const message = testInput.trim();
+    if (!message) return;
+    setTesting(true);
     setTestOutput("Pensando...");
-    setTimeout(() => {
-      const m = MODEL_OPTIONS.find(o => o.id === editing?.model);
-      setTestOutput(`Olá! Que ótimo ter você por aqui 👋\n\nEntendi sua mensagem: "${testInput}".\n\nPosso te ajudar agora mesmo. Me conta um pouco mais sobre o que você está buscando para que eu possa te direcionar da melhor forma?\n\n[Resposta gerada pelo modelo ${m?.model}]`);
-    }, 700);
+    try {
+      const { reply, model } = await whatsappApi.testAgent({
+        model: editing.model,
+        temperature: editing.temperature,
+        systemPrompt: editing.prompt,
+        userMessage: message,
+      });
+      setTestOutput(`${reply}\n\n[Resposta gerada pelo modelo ${model}]`);
+    } catch (err) {
+      const msg = (err as Error).message || "Falha ao testar o agente";
+      if (msg.includes("OpenAI key não configurada")) {
+        toast.error("Configure a OpenAI API key em Configurações");
+      } else {
+        toast.error(msg);
+      }
+      setTestOutput("");
+    } finally {
+      setTesting(false);
+    }
   };
 
   return (
@@ -103,7 +167,9 @@ export default function Agentes() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {agents.map(a => {
-          const model = MODEL_OPTIONS.find(o => o.id === a.model);
+          const model = MODEL_OPTIONS.find(o => o.id === normalizeModel(a.model));
+          const usage = agentUsage[a.id];
+          const totalTokens = (usage?.promptTokens || 0) + (usage?.completionTokens || 0);
           return (
             <div key={a.id} className="card-elevated p-5 hover:shadow-soft transition-all">
               <div className="flex items-start justify-between mb-3">
@@ -124,6 +190,9 @@ export default function Agentes() {
                 {!a.prompt && <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-destructive-soft text-destructive font-semibold"><AlertTriangle className="h-3 w-3" /> Requer revisão</span>}
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary-soft text-primary font-semibold">{model?.label}</span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-secondary text-muted-foreground font-semibold">{a.conversations} conversas</span>
+                <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-info-soft text-info font-semibold" title={`${(usage?.promptTokens || 0).toLocaleString()} prompt + ${(usage?.completionTokens || 0).toLocaleString()} completion`}>
+                  <DollarSign className="h-3 w-3" /> {formatUsd(usage?.costUsd || 0)} · {formatTokens(totalTokens)} tk
+                </span>
               </div>
 
               <div className="text-[10px] text-muted-foreground mb-3">Atualizado {formatDistanceToNow(new Date(a.updatedAt), { locale: ptBR, addSuffix: true })}</div>
@@ -163,17 +232,54 @@ export default function Agentes() {
                 <div>
                   <Label className="mb-2 block">Modelo de IA</Label>
                   <div className="grid grid-cols-3 gap-2">
-                    {MODEL_OPTIONS.map(m => (
-                      <button key={m.id} type="button" onClick={() => setEditing({ ...editing, model: m.id })}
-                        className={cn("p-3 rounded-xl border-2 text-left transition-all",
-                          editing.model === m.id ? "border-primary bg-primary-soft" : "border-border bg-card hover:border-primary/40")}>
-                        <div className="font-semibold text-sm">{m.label}</div>
-                        <div className="text-[10px] font-mono text-muted-foreground">{m.model}</div>
-                        <div className="text-[10px] text-muted-foreground mt-1">{m.desc}</div>
-                      </button>
-                    ))}
+                    {MODEL_OPTIONS.map(m => {
+                      const selected = normalizeModel(editing.model) === m.id;
+                      return (
+                        <button key={m.id} type="button" onClick={() => setEditing({ ...editing, model: m.id })}
+                          className={cn("p-3 rounded-xl border-2 text-left transition-all",
+                            selected ? "border-primary bg-primary-soft" : "border-border bg-card hover:border-primary/40")}>
+                          <div className="font-semibold text-sm">{m.label}</div>
+                          <div className="text-[10px] font-mono text-muted-foreground">{m.model}</div>
+                          <div className="text-[10px] text-muted-foreground mt-1">{m.desc}</div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
+
+                {editing.id !== "new" && editingUsage && (
+                  <div className="rounded-xl border border-border bg-secondary/60 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-semibold flex items-center gap-1.5"><DollarSign className="h-3.5 w-3.5 text-primary" /> Custo acumulado</div>
+                        <div className="text-[11px] text-muted-foreground">Soma de todas as respostas geradas por este agente.</div>
+                      </div>
+                      <Button size="sm" variant="ghost" className="gap-1 text-xs" onClick={async () => {
+                        await resetAgentUsage(editing.id);
+                        toast.success("Custo zerado");
+                      }}>
+                        <RotateCcw className="w-3 h-3" /> Zerar
+                      </Button>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-lg bg-card p-2">
+                        <div className="text-[10px] text-muted-foreground">Custo total</div>
+                        <div className="text-sm font-bold">{formatUsd(editingUsage.costUsd || 0)}</div>
+                      </div>
+                      <div className="rounded-lg bg-card p-2">
+                        <div className="text-[10px] text-muted-foreground">Prompt</div>
+                        <div className="text-sm font-bold">{(editingUsage.promptTokens || 0).toLocaleString()}</div>
+                      </div>
+                      <div className="rounded-lg bg-card p-2">
+                        <div className="text-[10px] text-muted-foreground">Completion</div>
+                        <div className="text-sm font-bold">{(editingUsage.completionTokens || 0).toLocaleString()}</div>
+                      </div>
+                    </div>
+                    {editingUsage.lastUpdatedAt && (
+                      <div className="text-[10px] text-muted-foreground">Atualizado {formatDistanceToNow(new Date(editingUsage.lastUpdatedAt), { locale: ptBR, addSuffix: true })}</div>
+                    )}
+                  </div>
+                )}
 
                 <div>
                   <Label>Temperatura: {editing.temperature.toFixed(1)}</Label>
@@ -182,7 +288,7 @@ export default function Agentes() {
 
                 <div className="rounded-xl bg-secondary p-3">
                   <div className="font-semibold text-sm">Status operacional</div>
-                  <div className="text-xs text-muted-foreground">A ativação será controlada pela conversa, regras e configuração de fora de serviço.</div>
+                  <div className="text-xs text-muted-foreground">A ativação será controlada pela conversa e pelas regras. O horário de funcionamento do agente fica em Configurações → Distribuições & Agente.</div>
                 </div>
               </TabsContent>
 
@@ -205,9 +311,6 @@ export default function Agentes() {
                 <div><Label>Palavras que bloqueiam o agente</Label>
                   <Input value={editing.blockWords.join(", ")} onChange={e => setEditing({ ...editing, blockWords: e.target.value.split(",").map(s => s.trim()).filter(Boolean) })} /></div>
                 <div><Label>Limite de mensagens automáticas por conversa</Label><Input type="number" defaultValue={10} /></div>
-                <div><Label>Horário de funcionamento</Label>
-                  <div className="flex gap-2"><Input type="time" defaultValue="08:00" /><Input type="time" defaultValue="18:00" /></div>
-                </div>
               </TabsContent>
 
               <TabsContent value="test" className="space-y-3 mt-4">
@@ -216,7 +319,9 @@ export default function Agentes() {
                 </div>
                 <div><Label>Mensagem do cliente</Label>
                   <Textarea value={testInput} onChange={e => setTestInput(e.target.value)} rows={3} placeholder="Digite uma mensagem para testar..." /></div>
-                <Button onClick={runTest} className="bg-gradient-primary gap-2"><Send className="w-4 h-4" /> Testar agente</Button>
+                <Button onClick={runTest} className="bg-gradient-primary gap-2" disabled={testing || !testInput.trim()}>
+                  {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Testar agente
+                </Button>
                 {testOutput && (
                   <div className="rounded-xl border border-border bg-secondary p-4">
                     <div className="text-xs font-semibold text-muted-foreground mb-2 flex items-center gap-1"><Bot className="w-3 h-3" /> Resposta gerada</div>
@@ -225,11 +330,45 @@ export default function Agentes() {
                 )}
               </TabsContent>
 
-              <TabsContent value="history" className="mt-4">
-                <div className="text-center py-12 text-muted-foreground">
-                  <MessageSquare className="w-10 h-10 mx-auto mb-3 opacity-40" />
-                  <div className="text-sm">Histórico de conversas atendidas pelo agente aparecerá aqui.</div>
-                </div>
+              <TabsContent value="history" className="mt-4 space-y-2">
+                {editing.id === "new" ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <MessageSquare className="w-10 h-10 mx-auto mb-3 opacity-40" />
+                    <div className="text-sm">Salve o agente para começar a registrar histórico.</div>
+                  </div>
+                ) : editingHistory.length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <MessageSquare className="w-10 h-10 mx-auto mb-3 opacity-40" />
+                    <div className="text-sm">Ainda nenhuma conversa atendida por este agente.</div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="text-xs text-muted-foreground mb-2">{editingHistory.length} conversa(s) já atendida(s) por este agente.</div>
+                    <div className="max-h-[400px] overflow-y-auto divide-y divide-border rounded-xl border border-border">
+                      {editingHistory.map(item => (
+                        <button
+                          key={item.conversationId}
+                          type="button"
+                          onClick={() => {
+                            setOpen(false);
+                            navigate(`/conversas?id=${encodeURIComponent(item.conversationId)}`);
+                          }}
+                          className="w-full text-left p-3 hover:bg-secondary/60 transition flex items-center justify-between gap-3"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold truncate">{item.customer}</div>
+                            <div className="text-[11px] text-muted-foreground truncate">
+                              {item.lastInteraction
+                                ? `Última interação ${formatDistanceToNow(new Date(item.lastInteraction), { locale: ptBR, addSuffix: true })}`
+                                : "Sem registro de última interação"}
+                            </div>
+                          </div>
+                          <MessageSquare className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
               </TabsContent>
             </Tabs>
           )}

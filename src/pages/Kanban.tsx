@@ -21,7 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 export default function Kanban() {
   const { deals, moveDeal, stages, removeStage, appointments, canViewDeal, isAdmin, teamUsers, tags } = useCRM();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const boardRef = useRef<HTMLDivElement>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const [selected, setSelected] = useState<Deal | null>(null);
@@ -105,7 +105,10 @@ export default function Kanban() {
     if (!deal) return;
     setSelected(deal);
     setSheetOpen(true);
-  }, [canViewDeal, deals, openDealId]);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("deal");
+    setSearchParams(nextParams, { replace: true });
+  }, [canViewDeal, deals, openDealId, searchParams, setSearchParams]);
 
   const handleRemoveStage = (id: string, title: string, count: number) => {
     if (!isAdmin) {

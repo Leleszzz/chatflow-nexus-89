@@ -1,8 +1,24 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { createAuthToken, verifyAuthToken } from "@/lib/auth-token";
-import { Deal, DealStage, INITIAL_DEALS, INITIAL_AGENTS, Agent, ALL_TAGS, STAGES, Stage } from "@/lib/mock-data";
-import { hashPassword, verifyPassword } from "@/lib/password";
-import usersData from "@/banco-de-dados/users.json";
+import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
+import { decodeAuthToken } from "@/lib/auth-token";
+import { Deal, DealStage, INITIAL_DEALS, INITIAL_AGENTS, Agent, AgentUsage, ALL_TAGS, STAGES, Stage } from "@/lib/mock-data";
+import { setApiAuthToken, whatsappApi, UserRecord, ProntuarioAttachment, ProntuarioCategory } from "@/lib/whatsapp-api";
+
+const inferProntuarioCategory = (
+  messageType?: string,
+  mimeType?: string,
+): ProntuarioCategory => {
+  const t = String(messageType || "").toLowerCase();
+  if (t === "image" || t === "sticker") return "foto";
+  if (t === "video") return "video";
+  if (t === "audio" || t === "ptt") return "audio";
+  if (t === "document") return "documento";
+  const m = String(mimeType || "").toLowerCase();
+  if (m.startsWith("image/")) return "foto";
+  if (m.startsWith("video/")) return "video";
+  if (m.startsWith("audio/")) return "audio";
+  if (m) return "documento";
+  return "outro";
+};
 
 interface FinishedDeal {
   dealId: string;
@@ -43,13 +59,103 @@ export type TeamUser = {
   phone?: string;
   role: string;
   password?: string;
-  passwordHash?: string;
-  passwordSalt?: string;
   active: boolean;
   allowedTags?: string[];
   allowedConversationIds?: string[];
   allowedInstanceIds?: string[];
   receivesNewLeads?: boolean;
+};
+
+export type SchedulingProposal = {
+  baseDateIso: string;
+  days: string[];
+  createdAt: string;
+};
+
+export type CrmPatch = {
+  dealId?: string;
+  customer?: string;
+  sellerId?: string;
+  assignedSellerIds?: string[];
+  temperature?: Deal["temperature"];
+  tags?: string[];
+  stage?: string;
+  notes?: string;
+  aiEnabled?: boolean;
+  aiAgentId?: string;
+  schedulingProposal?: SchedulingProposal | null;
+};
+
+export type LeadDistributionStrategy = "round-robin" | "load-balanced";
+
+export type LeadDistribution = {
+  enabled: boolean;
+  strategy: LeadDistributionStrategy;
+  eligibleUserIds: string[];
+  lastAssignedUserId?: string;
+};
+
+export type DayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+export type DaySchedule = {
+  enabled: boolean;
+  startTime: string;
+  endTime: string;
+};
+
+export type AgentSchedule = {
+  enabled: boolean;
+  agentId: string;
+  weekly: Record<DayOfWeek, DaySchedule>;
+};
+
+export const WEEKDAY_LABELS: Record<DayOfWeek, string> = {
+  0: "Domingo",
+  1: "Segunda",
+  2: "Terça",
+  3: "Quarta",
+  4: "Quinta",
+  5: "Sexta",
+  6: "Sábado",
+};
+
+const DEFAULT_LEAD_DISTRIBUTION: LeadDistribution = {
+  enabled: false,
+  strategy: "round-robin",
+  eligibleUserIds: [],
+};
+
+const DEFAULT_AGENT_SCHEDULE: AgentSchedule = {
+  enabled: false,
+  agentId: "",
+  weekly: {
+    0: { enabled: false, startTime: "18:00", endTime: "23:59" },
+    1: { enabled: false, startTime: "18:00", endTime: "23:59" },
+    2: { enabled: false, startTime: "18:00", endTime: "23:59" },
+    3: { enabled: false, startTime: "18:00", endTime: "23:59" },
+    4: { enabled: false, startTime: "18:00", endTime: "23:59" },
+    5: { enabled: false, startTime: "18:00", endTime: "23:59" },
+    6: { enabled: false, startTime: "18:00", endTime: "23:59" },
+  },
+};
+
+const timeToMinutes = (time: string) => {
+  const [h, m] = time.split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return h * 60 + m;
+};
+
+export const isAgentScheduleActiveAt = (schedule: AgentSchedule, date: Date = new Date()) => {
+  if (!schedule.enabled) return false;
+  const day = date.getDay() as DayOfWeek;
+  const window = schedule.weekly[day];
+  if (!window?.enabled) return false;
+  const start = timeToMinutes(window.startTime);
+  const end = timeToMinutes(window.endTime);
+  if (start === null || end === null) return false;
+  const now = date.getHours() * 60 + date.getMinutes();
+  if (start <= end) return now >= start && now <= end;
+  return now >= start || now <= end;
 };
 
 export type AccountProfile = {
@@ -65,6 +171,7 @@ interface CRMCtx {
   deals: Deal[];
   setDeals: React.Dispatch<React.SetStateAction<Deal[]>>;
   addDeal: (deal: Deal) => void;
+  removeDeal: (id: string) => void;
   moveDeal: (id: string, stage: DealStage) => void;
   updateDeal: (id: string, patch: Partial<Deal>) => void;
   stages: Stage[];
@@ -81,6 +188,9 @@ interface CRMCtx {
   finishDeal: (f: FinishedDeal) => void;
   agents: Agent[];
   setAgents: React.Dispatch<React.SetStateAction<Agent[]>>;
+  agentUsage: Record<string, AgentUsage>;
+  refreshAgentUsage: () => Promise<void>;
+  resetAgentUsage: (agentId: string) => Promise<void>;
   tags: string[];
   setTags: React.Dispatch<React.SetStateAction<string[]>>;
   teamUsers: TeamUser[];
@@ -94,6 +204,35 @@ interface CRMCtx {
   logout: () => void;
   hasPermission: (permission: PermissionKey) => boolean;
   canViewDeal: (deal: Deal) => boolean;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  refreshTeamUsers: () => Promise<void>;
+  conversationPatches: Record<string, CrmPatch>;
+  setConversationPatch: (conversationId: string, patch: CrmPatch) => void;
+  clearSchedulingProposal: (conversationId: string) => void;
+  leadDistribution: LeadDistribution;
+  setLeadDistribution: React.Dispatch<React.SetStateAction<LeadDistribution>>;
+  agentSchedule: AgentSchedule;
+  setAgentSchedule: React.Dispatch<React.SetStateAction<AgentSchedule>>;
+  getEligibleSellers: () => TeamUser[];
+  assignNextSeller: (conversationId: string) => string | null;
+  applyScheduledAgentIfActive: (conversationId: string) => boolean;
+  isAgentScheduleActive: (date?: Date) => boolean;
+  prontuarios: ProntuarioAttachment[];
+  refreshProntuarios: () => Promise<void>;
+  getProntuariosByDeal: (dealId: string) => ProntuarioAttachment[];
+  linkMessageToProntuario: (input: {
+    dealId: string;
+    name: string;
+    mediaUrl: string;
+    mediaMime?: string;
+    messageType?: string;
+    conversationId?: string;
+    messageId?: string;
+    instanceId?: string;
+  }) => Promise<ProntuarioAttachment>;
+  uploadProntuarioFile: (input: { dealId: string; name: string; file: File }) => Promise<ProntuarioAttachment>;
+  renameProntuario: (id: string, name: string) => Promise<void>;
+  removeProntuario: (id: string) => Promise<void>;
 }
 
 const Ctx = createContext<CRMCtx | null>(null);
@@ -131,6 +270,39 @@ const loadStored = <T,>(key: string, fallback: T) => {
   }
 };
 
+const VALID_MODELS: ReadonlyArray<Agent["model"]> = ["econom", "balanced", "premium"];
+
+const normalizeAgent = (raw: Partial<Agent> & { id?: string }): Agent => ({
+  id: String(raw.id || `a${Date.now()}`),
+  name: String(raw.name || ""),
+  description: String(raw.description || ""),
+  prompt: String(raw.prompt || ""),
+  model: (VALID_MODELS as readonly string[]).includes(raw.model as string)
+    ? (raw.model as Agent["model"])
+    : "balanced",
+  temperature: Number.isFinite(Number(raw.temperature)) ? Number(raw.temperature) : 0.7,
+  active: raw.active !== false,
+  conversations: Number(raw.conversations) || 0,
+  updatedAt: String(raw.updatedAt || new Date().toISOString()),
+  channel: String(raw.channel || "WhatsApp Principal"),
+  triggerTags: Array.isArray(raw.triggerTags) ? raw.triggerTags.map(String) : [],
+  blockWords: Array.isArray(raw.blockWords) ? raw.blockWords.map(String) : [],
+  handoffMessage: String(raw.handoffMessage || "Vou te transferir para um especialista."),
+  fallbackMessage: raw.fallbackMessage,
+  objective: raw.objective,
+  tone: raw.tone,
+});
+
+const loadAgents = (): Agent[] => {
+  const stored = loadStored<Partial<Agent>[]>("crm-agents", INITIAL_AGENTS as Partial<Agent>[]);
+  return Array.isArray(stored) ? stored.map(normalizeAgent) : [];
+};
+
+const SAMPLE_DEAL_IDS = new Set(Array.from({ length: 14 }, (_, index) => `d${index + 1}`));
+
+const loadInitialDeals = () => loadStored("crm-deals", INITIAL_DEALS)
+  .filter(deal => !SAMPLE_DEAL_IDS.has(deal.id));
+
 const INITIAL_APPOINTMENTS: Appointment[] = [
   {
     id: "a1",
@@ -156,36 +328,12 @@ const INITIAL_APPOINTMENTS: Appointment[] = [
   },
 ];
 
-const initialTeamUsers = usersData as TeamUser[];
-const adminUser = initialTeamUsers.find(user => user.id === "admin") || initialTeamUsers[0];
-
-const initialAccountProfile: AccountProfile = {
-  name: adminUser.name,
-  email: adminUser.email,
-  phone: adminUser.phone || "",
-  role: adminUser.role,
-  avatar: adminUser.avatar,
-  photoUrl: adminUser.photoUrl,
-};
-
-const normalizeTeamUsers = (users: TeamUser[]) => {
-  const withRequiredFields = users.map(user => {
-    const isLegacyUser = !user.passwordHash && !user.password;
-    return {
-      ...user,
-      role: user.id !== "admin" && isLegacyUser && user.role === "Administrador" ? "Vendedora" : user.role,
-      password: user.password,
-      username: user.username || (user.id === "admin" ? "admin" : user.email.split("@")[0]),
-      allowedTags: user.allowedTags || [],
-      allowedConversationIds: user.allowedConversationIds || [],
-      allowedInstanceIds: user.allowedInstanceIds || [],
-      receivesNewLeads: user.receivesNewLeads ?? user.role === "Vendedora",
-    };
-  });
-
-  return withRequiredFields.some(user => user.id === "admin")
-    ? withRequiredFields.map(user => user.id === "admin" ? { ...adminUser, ...user, role: "Administrador" } : user)
-    : [adminUser, ...withRequiredFields];
+const FALLBACK_ADMIN_PROFILE: AccountProfile = {
+  name: "Administrador",
+  email: "admin@empresa.com",
+  phone: "",
+  role: "Administrador",
+  avatar: "AD",
 };
 
 const profileFromUser = (user: TeamUser): AccountProfile => ({
@@ -197,18 +345,42 @@ const profileFromUser = (user: TeamUser): AccountProfile => ({
   photoUrl: user.photoUrl,
 });
 
+const toTeamUser = (record: UserRecord): TeamUser => ({
+  id: record.id,
+  name: record.name,
+  username: record.username,
+  avatar: record.avatar || "",
+  photoUrl: record.photoUrl,
+  email: record.email,
+  phone: record.phone,
+  role: record.role,
+  active: record.active,
+  allowedTags: record.allowedTags || [],
+  allowedConversationIds: record.allowedConversationIds || [],
+  allowedInstanceIds: record.allowedInstanceIds || [],
+  receivesNewLeads: record.receivesNewLeads,
+});
+
 export function CRMProvider({ children }: { children: ReactNode }) {
-  const [deals, setDeals] = useState<Deal[]>(() => loadStored("crm-deals", INITIAL_DEALS));
+  const [deals, setDeals] = useState<Deal[]>(loadInitialDeals);
   const [finished, setFinished] = useState<FinishedDeal[]>([]);
-  const [agents, setAgents] = useState<Agent[]>(INITIAL_AGENTS);
-  const [tags, setTags] = useState<string[]>(ALL_TAGS);
+  const [agents, setAgents] = useState<Agent[]>(() => loadAgents());
+  const [agentUsage, setAgentUsage] = useState<Record<string, AgentUsage>>({});
+  const [tags, setTags] = useState<string[]>(() => loadStored("crm-tags", ALL_TAGS));
   const [stages, setStages] = useState<Stage[]>(() => loadStored("crm-stages", STAGES));
   const [appointments, setAppointments] = useState<Appointment[]>(() => loadStored("crm-appointments", INITIAL_APPOINTMENTS));
-  const [teamUsers, setTeamUsers] = useState<TeamUser[]>(() => normalizeTeamUsers(loadStored("crm-team-users", initialTeamUsers)));
+  const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
   const [authToken, setAuthToken] = useState<string | null>(() => loadStored("crm-auth-token", null));
   const [authReady, setAuthReady] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [accountProfile, setAccountProfile] = useState<AccountProfile>(() => loadStored("crm-account-profile", initialAccountProfile));
+  const [accountProfile, setAccountProfile] = useState<AccountProfile>(() => loadStored("crm-account-profile", FALLBACK_ADMIN_PROFILE));
+  const [conversationPatches, setConversationPatches] = useState<Record<string, CrmPatch>>(() => loadStored("crm-wa-conversation-patches", {} as Record<string, CrmPatch>));
+  const [leadDistribution, setLeadDistribution] = useState<LeadDistribution>(() => ({ ...DEFAULT_LEAD_DISTRIBUTION, ...loadStored("crm-lead-distribution", DEFAULT_LEAD_DISTRIBUTION) }));
+  const [prontuarios, setProntuarios] = useState<ProntuarioAttachment[]>([]);
+  const [agentSchedule, setAgentSchedule] = useState<AgentSchedule>(() => {
+    const stored = loadStored("crm-agent-schedule", DEFAULT_AGENT_SCHEDULE);
+    return { ...DEFAULT_AGENT_SCHEDULE, ...stored, weekly: { ...DEFAULT_AGENT_SCHEDULE.weekly, ...(stored?.weekly || {}) } };
+  });
 
   const currentUser = teamUsers.find(user => user.id === currentUserId && user.active) || null;
   const isAdmin = currentUser?.role === "Administrador";
@@ -226,12 +398,28 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   }, [appointments]);
 
   useEffect(() => {
-    window.localStorage.setItem("crm-team-users", JSON.stringify(teamUsers));
-  }, [teamUsers]);
-
-  useEffect(() => {
     window.localStorage.setItem("crm-account-profile", JSON.stringify(accountProfile));
   }, [accountProfile]);
+
+  useEffect(() => {
+    window.localStorage.setItem("crm-agents", JSON.stringify(agents));
+  }, [agents]);
+
+  useEffect(() => {
+    window.localStorage.setItem("crm-tags", JSON.stringify(tags));
+  }, [tags]);
+
+  useEffect(() => {
+    window.localStorage.setItem("crm-wa-conversation-patches", JSON.stringify(conversationPatches));
+  }, [conversationPatches]);
+
+  useEffect(() => {
+    window.localStorage.setItem("crm-lead-distribution", JSON.stringify(leadDistribution));
+  }, [leadDistribution]);
+
+  useEffect(() => {
+    window.localStorage.setItem("crm-agent-schedule", JSON.stringify(agentSchedule));
+  }, [agentSchedule]);
 
   useEffect(() => {
     if (authToken) {
@@ -243,10 +431,66 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   }, [authToken]);
 
   useEffect(() => {
+    setApiAuthToken(authToken);
+  }, [authToken]);
+
+  const refreshTeamUsers = useCallback(async () => {
+    try {
+      const list = await whatsappApi.listUsers();
+      setTeamUsers(list.map(toTeamUser));
+    } catch (err) {
+      console.warn("[crm-store] listUsers failed", err);
+    }
+  }, []);
+
+  const refreshProntuarios = useCallback(async () => {
+    try {
+      const list = await whatsappApi.listProntuarios();
+      setProntuarios(list);
+    } catch (err) {
+      console.warn("[crm-store] listProntuarios failed", err);
+    }
+  }, []);
+
+  const refreshAgentUsage = useCallback(async () => {
+    try {
+      const map = await whatsappApi.getAgentUsage();
+      setAgentUsage(map || {});
+    } catch (err) {
+      console.warn("[crm-store] getAgentUsage failed", err);
+    }
+  }, []);
+
+  const resetAgentUsageRemote = useCallback(async (agentId: string) => {
+    try {
+      await whatsappApi.resetAgentUsage(agentId);
+      setAgentUsage(prev => {
+        if (!(agentId in prev)) return prev;
+        const next = { ...prev };
+        delete next[agentId];
+        return next;
+      });
+    } catch (err) {
+      console.warn("[crm-store] resetAgentUsage failed", err);
+    }
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
 
     if (!authToken) {
       setCurrentUserId(null);
+      setTeamUsers([]);
+      setAuthReady(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const payload = decodeAuthToken(authToken);
+    if (!payload || (payload.exp && payload.exp <= Math.floor(Date.now() / 1000))) {
+      setCurrentUserId(null);
+      setAuthToken(null);
       setAuthReady(true);
       return () => {
         cancelled = true;
@@ -254,16 +498,24 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     }
 
     setAuthReady(false);
-    verifyAuthToken(authToken).then(payload => {
-      if (cancelled) return;
-      if (!payload) {
+    whatsappApi.me()
+      .then(({ user }) => {
+        if (cancelled) return;
+        setCurrentUserId(user.id);
+        setTeamUsers(prev => {
+          if (prev.some(u => u.id === user.id)) return prev;
+          return [...prev, toTeamUser(user)];
+        });
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.warn("[crm-store] /auth/me failed", err);
         setCurrentUserId(null);
         setAuthToken(null);
-      } else {
-        setCurrentUserId(payload.sub);
-      }
-      setAuthReady(true);
-    });
+      })
+      .finally(() => {
+        if (!cancelled) setAuthReady(true);
+      });
 
     return () => {
       cancelled = true;
@@ -271,59 +523,42 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   }, [authToken]);
 
   useEffect(() => {
+    if (!currentUserId) return;
+    refreshTeamUsers();
+    refreshProntuarios();
+    refreshAgentUsage();
+  }, [currentUserId, refreshTeamUsers, refreshProntuarios, refreshAgentUsage]);
+
+  useEffect(() => {
     if (currentUser) setAccountProfile(profileFromUser(currentUser));
   }, [currentUser]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const legacyUsers = teamUsers.filter(user => user.password);
-
-    if (!legacyUsers.length) return;
-
-    Promise.all(teamUsers.map(async user => {
-      if (!user.password) return user;
-      const { passwordHash, passwordSalt } = await hashPassword(user.password);
-      const { password: _password, ...userWithoutPassword } = user;
-      return { ...userWithoutPassword, passwordHash, passwordSalt };
-    })).then(nextUsers => {
-      if (!cancelled) setTeamUsers(nextUsers);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [teamUsers]);
-
   const login = async (identifier: string, password: string) => {
-    const normalizedIdentifier = identifier.trim().toLowerCase();
-    const matchingUsers = teamUsers.filter(item =>
-      item.active &&
-      [item.username, item.email, item.name].filter(Boolean).some(value => value?.toLowerCase() === normalizedIdentifier)
-    );
-    let user: TeamUser | undefined;
-
-    for (const item of matchingUsers) {
-      const validPassword = item.password
-        ? item.password === password
-        : await verifyPassword(password, item.passwordHash, item.passwordSalt);
-      if (validPassword) {
-        user = item;
-        break;
-      }
+    try {
+      const { token, user } = await whatsappApi.login(identifier, password);
+      setAuthToken(token);
+      setCurrentUserId(user.id);
+      setTeamUsers(prev => {
+        const next = prev.filter(u => u.id !== user.id);
+        return [...next, toTeamUser(user)];
+      });
+      setAuthReady(true);
+      setAccountProfile(profileFromUser(toTeamUser(user)));
+      return true;
+    } catch (err) {
+      console.warn("[crm-store] login failed", err);
+      return false;
     }
-
-    if (!user) return false;
-    const token = await createAuthToken(user);
-    setAuthToken(token);
-    setCurrentUserId(user.id);
-    setAuthReady(true);
-    setAccountProfile(profileFromUser(user));
-    return true;
   };
 
   const logout = () => {
     setCurrentUserId(null);
     setAuthToken(null);
+    setTeamUsers([]);
+  };
+
+  const changePassword = async (currentPassword: string, newPassword: string) => {
+    await whatsappApi.changePassword(currentPassword, newPassword);
   };
 
   const hasPermission = (permission: PermissionKey) => {
@@ -345,6 +580,14 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   };
 
   const addDeal = (deal: Deal) => setDeals(prev => [deal, ...prev]);
+  const removeDeal = (id: string) => {
+    setDeals(prev => prev.filter(deal => deal.id !== id));
+    setAppointments(prev => prev.filter(appointment => appointment.dealId !== id));
+    setProntuarios(prev => prev.filter(p => p.dealId !== id));
+    whatsappApi.deleteProntuariosByDeal(id).catch(err => {
+      console.warn("[crm-store] deleteProntuariosByDeal failed", err);
+    });
+  };
   const moveDeal = (id: string, stage: DealStage) =>
     setDeals(prev => prev.map(d => (d.id === id ? { ...d, stage } : d)));
   const updateDeal = (id: string, patch: Partial<Deal>) =>
@@ -418,8 +661,106 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   const removeAppointment = (id: string) =>
     setAppointments(prev => prev.filter(appointment => appointment.id !== id));
 
+  const setConversationPatch = (conversationId: string, patch: CrmPatch) =>
+    setConversationPatches(prev => {
+      const merged = { ...(prev[conversationId] || {}), ...patch };
+      if (patch.schedulingProposal === null) delete merged.schedulingProposal;
+      return { ...prev, [conversationId]: merged };
+    });
+
+  const clearSchedulingProposal = (conversationId: string) =>
+    setConversationPatch(conversationId, { schedulingProposal: null });
+
+  const getEligibleSellers = (): TeamUser[] => {
+    const baseEligible = teamUsers.filter(user => user.active && user.receivesNewLeads && user.role !== "Administrador");
+    if (!leadDistribution.eligibleUserIds.length) return baseEligible;
+    return baseEligible.filter(user => leadDistribution.eligibleUserIds.includes(user.id));
+  };
+
+  const countAssignedConversations = (userId: string) => {
+    let count = 0;
+    for (const patch of Object.values(conversationPatches)) {
+      const assignees = [patch.sellerId, ...(patch.assignedSellerIds || [])].filter(Boolean);
+      if (assignees.includes(userId)) count += 1;
+    }
+    for (const deal of deals) {
+      if (deal.stage === "fechado" || deal.stage === "perdido") continue;
+      const assignees = [deal.sellerId, ...(deal.assignedSellerIds || [])].filter(Boolean);
+      if (assignees.includes(userId)) count += 1;
+    }
+    return count;
+  };
+
+  const assignNextSeller = (conversationId: string): string | null => {
+    const eligible = getEligibleSellers();
+    if (!eligible.length) return null;
+    let next: TeamUser;
+    if (leadDistribution.strategy === "load-balanced") {
+      const ranked = eligible
+        .map(user => ({ user, load: countAssignedConversations(user.id) }))
+        .sort((a, b) => a.load - b.load);
+      next = ranked[0].user;
+    } else {
+      const lastId = leadDistribution.lastAssignedUserId;
+      const lastIndex = lastId ? eligible.findIndex(user => user.id === lastId) : -1;
+      const nextIndex = (lastIndex + 1) % eligible.length;
+      next = eligible[nextIndex];
+    }
+    setConversationPatch(conversationId, { sellerId: next.id });
+    setLeadDistribution(prev => ({ ...prev, lastAssignedUserId: next.id }));
+    return next.id;
+  };
+
+  const applyScheduledAgentIfActive = (conversationId: string): boolean => {
+    if (!agentSchedule.enabled || !agentSchedule.agentId) return false;
+    if (!isAgentScheduleActiveAt(agentSchedule)) return false;
+    setConversationPatch(conversationId, { aiEnabled: true, aiAgentId: agentSchedule.agentId });
+    return true;
+  };
+
+  const isAgentScheduleActive = (date?: Date) => isAgentScheduleActiveAt(agentSchedule, date);
+
+  const getProntuariosByDeal = useCallback(
+    (dealId: string) => prontuarios.filter(p => p.dealId === dealId),
+    [prontuarios],
+  );
+
+  const linkMessageToProntuario: CRMCtx["linkMessageToProntuario"] = async input => {
+    const category = inferProntuarioCategory(input.messageType, input.mediaMime);
+    const created = await whatsappApi.createProntuario({
+      dealId: input.dealId,
+      name: input.name,
+      mediaUrl: input.mediaUrl,
+      mediaMime: input.mediaMime,
+      category,
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      instanceId: input.instanceId,
+      source: "whatsapp",
+      uploadedBy: currentUserId || undefined,
+    });
+    setProntuarios(prev => [created, ...prev.filter(p => p.id !== created.id)]);
+    return created;
+  };
+
+  const uploadProntuarioFile: CRMCtx["uploadProntuarioFile"] = async input => {
+    const created = await whatsappApi.uploadProntuario(input.dealId, input.name, input.file, currentUserId || undefined);
+    setProntuarios(prev => [created, ...prev.filter(p => p.id !== created.id)]);
+    return created;
+  };
+
+  const renameProntuario: CRMCtx["renameProntuario"] = async (id, name) => {
+    const updated = await whatsappApi.renameProntuario(id, name);
+    setProntuarios(prev => prev.map(p => (p.id === id ? updated : p)));
+  };
+
+  const removeProntuario: CRMCtx["removeProntuario"] = async id => {
+    await whatsappApi.deleteProntuario(id);
+    setProntuarios(prev => prev.filter(p => p.id !== id));
+  };
+
   return (
-    <Ctx.Provider value={{ deals, setDeals, addDeal, moveDeal, updateDeal, stages, addStage, updateStage, moveStage, reorderStage, removeStage, appointments, addAppointment, updateAppointment, removeAppointment, finished, finishDeal, agents, setAgents, tags, setTags, teamUsers, setTeamUsers, accountProfile, setAccountProfile, currentUser, authReady, isAdmin, login, logout, hasPermission, canViewDeal }}>
+    <Ctx.Provider value={{ deals, setDeals, addDeal, removeDeal, moveDeal, updateDeal, stages, addStage, updateStage, moveStage, reorderStage, removeStage, appointments, addAppointment, updateAppointment, removeAppointment, finished, finishDeal, agents, setAgents, agentUsage, refreshAgentUsage, resetAgentUsage: resetAgentUsageRemote, tags, setTags, teamUsers, setTeamUsers, accountProfile, setAccountProfile, currentUser, authReady, isAdmin, login, logout, hasPermission, canViewDeal, changePassword, refreshTeamUsers, conversationPatches, setConversationPatch, clearSchedulingProposal, leadDistribution, setLeadDistribution, agentSchedule, setAgentSchedule, getEligibleSellers, assignNextSeller, applyScheduledAgentIfActive, isAgentScheduleActive, prontuarios, refreshProntuarios, getProntuariosByDeal, linkMessageToProntuario, uploadProntuarioFile, renameProntuario, removeProntuario }}>
       {children}
     </Ctx.Provider>
   );

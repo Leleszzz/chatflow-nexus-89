@@ -1,5 +1,5 @@
 import { DragEvent, FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   addDays,
   addMonths,
@@ -16,7 +16,7 @@ import {
   subWeeks,
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { CalendarClock, ChevronDown, ChevronLeft, ChevronRight, Clock, Edit3, Plus, Trash2, UserRound } from "lucide-react";
+import { CalendarClock, ChevronDown, ChevronLeft, ChevronRight, Clock, Edit3, FolderOpen, Plus, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
@@ -82,9 +82,10 @@ const emptyForm = (dealId: string, sellerId: string, date = toDateKey(new Date()
 
 export default function Calendario() {
   const { appointments, addAppointment, updateAppointment, removeAppointment, deals, teamUsers, currentUser, isAdmin, canViewDeal } = useCRM();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [view, setView] = useState<CalendarView>("week");
-  const [cursor, setCursor] = useState(new Date(2026, 3, 30));
+  const [cursor, setCursor] = useState(() => new Date());
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Appointment | null>(null);
   const prefillKeyRef = useRef("");
@@ -95,8 +96,8 @@ export default function Calendario() {
   const [form, setForm] = useState(() => emptyForm(selectableDeals[0]?.id || "", defaultSellerId));
   const [draggingAppointmentId, setDraggingAppointmentId] = useState<string | null>(null);
   const [filterSellerIds, setFilterSellerIds] = useState<string[]>(() => isAdmin ? [] : currentUser?.id ? [currentUser.id] : []);
-  const filterType = "all";
-  const filterStatus = "all";
+  const [filterType, setFilterType] = useState<string>("all");
+  const [filterStatus, setFilterStatus] = useState<string>("all");
 
   const filteredAppointments = useMemo(() => appointments.filter(appointment => {
     if (!isAdmin && appointment.sellerId !== currentUser?.id) return false;
@@ -408,6 +409,24 @@ export default function Calendario() {
                 </div>
               </PopoverContent>
             </Popover>
+            <Select value={filterType} onValueChange={setFilterType}>
+              <SelectTrigger className="h-9 w-[150px]"><SelectValue placeholder="Tipo" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos tipos</SelectItem>
+                {APPOINTMENT_TYPES.map(option => (
+                  <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={filterStatus} onValueChange={setFilterStatus}>
+              <SelectTrigger className="h-9 w-[150px]"><SelectValue placeholder="Status" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos status</SelectItem>
+                <SelectItem value="agendado">Agendado</SelectItem>
+                <SelectItem value="concluido">Concluído</SelectItem>
+                <SelectItem value="cancelado">Cancelado</SelectItem>
+              </SelectContent>
+            </Select>
             <div className="grid grid-cols-3 rounded-lg border border-border bg-secondary/60 p-1 text-sm">
               {(["day", "week", "month"] as CalendarView[]).map(item => (
                 <button
@@ -622,7 +641,7 @@ export default function Calendario() {
               </div>
             </div>
             <DialogFooter className="gap-2 sm:justify-between sm:space-x-0">
-              <div>
+              <div className="flex flex-wrap gap-2">
                 {editing && (
                   <Button
                     type="button"
@@ -635,6 +654,19 @@ export default function Calendario() {
                     }}
                   >
                     <Trash2 className="h-4 w-4" /> Excluir
+                  </Button>
+                )}
+                {form.dealId && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => {
+                      setModalOpen(false);
+                      navigate(`/prontuarios?dealId=${encodeURIComponent(form.dealId)}`);
+                    }}
+                  >
+                    <FolderOpen className="h-4 w-4" /> Prontuário
                   </Button>
                 )}
               </div>

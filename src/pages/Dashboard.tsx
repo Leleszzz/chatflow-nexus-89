@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { format, subDays } from "date-fns";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { MetricCard } from "@/components/shared/MetricCard";
 import { ClientTemperatureBadge } from "@/components/shared/Badges";
@@ -10,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useCRM } from "@/store/crm-store";
-import { SELLERS, MONTHLY_SERIES, REFUSAL_PIE, SELLER_RANKING } from "@/lib/mock-data";
+import { useDashboardMetrics, formatSecondsAsMinSec } from "@/hooks/useDashboardMetrics";
 import { Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, CartesianGrid, Area, AreaChart } from "recharts";
 import { MessageCircle, Clock, AlertTriangle, ShoppingBag, TrendingUp, Flame, Thermometer, Snowflake, ChevronDown, ChevronRight } from "lucide-react";
 
@@ -19,20 +20,12 @@ const PERIODS = [
   { id: "7d", label: "7 dias", days: 7 },
   { id: "30d", label: "30 dias", days: 30 },
   { id: "custom", label: "Personalizado", days: 30 },
-];
+] as const;
 
 const PIE_COLORS = ["hsl(var(--primary))", "hsl(var(--info))", "hsl(var(--warning))", "hsl(var(--hot))", "hsl(var(--success))", "hsl(var(--muted-foreground))"];
-const sellerMultipliers: Record<string, number> = { all: 1, s1: 1.16, s2: 1.04, s3: 0.78, s4: 0.92, s5: 0.86 };
-const SELLER_IDS = SELLERS.map(s => s.id);
-const refusalReasonParams: Record<string, string> = {
-  "Preço alto": "Preço alto",
-  "Sem orçamento": "Cliente sem orçamento",
-  "Comprou com concorrente": "Comprou com concorrente",
-  "Não respondeu mais": "Não respondeu mais",
-  "Apenas pesquisando": "Está apenas pesquisando",
-  "Outros": "Outros",
-};
-const formatBRL = (value: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 }).format(value);
+
+const formatBRL = (value: number) =>
+  new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 }).format(value);
 const formatSignedInteger = (value: number) => `${value >= 0 ? "+" : ""}${Math.round(value)}`;
 const formatSignedBRL = (value: number) => `${value >= 0 ? "+" : "-"}${formatBRL(Math.abs(value))}`;
 
@@ -44,21 +37,6 @@ function buildMetricDelta(current: number, previous: number, valueFormatter = fo
     value: valueFormatter(difference),
     positive: difference >= 0,
   };
-}
-
-function buildHourlySeries(multiplier: number) {
-  const dayBase = MONTHLY_SERIES[MONTHLY_SERIES.length - 1];
-  return Array.from({ length: 24 }, (_, hour) => {
-    const activity = 0.45 + Math.sin((hour - 7) / 24 * Math.PI) * 0.35 + (hour >= 8 && hour <= 18 ? 0.35 : 0);
-    const atendimentos = Math.max(0, Math.round((dayBase.atendimentos / 13) * activity * multiplier));
-    const vendas = Math.max(0, Math.round((dayBase.vendas / 16) * activity * multiplier));
-
-    return {
-      label: `${String(hour).padStart(2, "0")}h`,
-      atendimentos,
-      vendas,
-    };
-  });
 }
 
 function formatTimeWithoutResponse(lastInteraction: string) {
@@ -80,122 +58,70 @@ function formatTimeWithoutResponse(lastInteraction: string) {
   return remainingHours ? `${days}d ${remainingHours}h` : `${days}d`;
 }
 
-function daysBetween(start: string, end: string) {
-  if (!start || !end) return 30;
-  const startDate = new Date(`${start}T00:00:00`);
-  const endDate = new Date(`${end}T00:00:00`);
-  const diff = Math.floor((+endDate - +startDate) / 86400000) + 1;
-  return Math.min(Math.max(diff, 1), 30);
-}
-
 export default function Dashboard() {
-  const [period, setPeriod] = useState("7d");
-  const [selectedSellerIds, setSelectedSellerIds] = useState<string[]>(SELLER_IDS);
-  const [customStart, setCustomStart] = useState("2026-04-01");
-  const [customEnd, setCustomEnd] = useState("2026-04-28");
-  const { deals, canViewDeal, currentUser, isAdmin } = useCRM();
+  const [period, setPeriod] = useState<typeof PERIODS[number]["id"]>("7d");
+  const today = useMemo(() => new Date(), []);
+  const [customStart, setCustomStart] = useState(() => format(subDays(today, 30), "yyyy-MM-dd"));
+  const [customEnd, setCustomEnd] = useState(() => format(today, "yyyy-MM-dd"));
+  const { teamUsers, currentUser, isAdmin } = useCRM();
   const navigate = useNavigate();
 
-  const days = period === "custom"
-    ? daysBetween(customStart, customEnd)
-    : PERIODS.find(p => p.id === period)?.days ?? 7;
-  const effectiveSellerIds = useMemo(
-    () => (isAdmin ? selectedSellerIds : currentUser?.id ? [currentUser.id] : []),
-    [currentUser?.id, isAdmin, selectedSellerIds],
+  const sellers = useMemo(
+    () => teamUsers.filter(u => u.active && u.role === "Vendedora"),
+    [teamUsers],
   );
-  const allSellersSelected = isAdmin && effectiveSellerIds.length === SELLER_IDS.length;
+  const SELLER_IDS = useMemo(() => sellers.map(s => s.id), [sellers]);
+
+  const [selectedSellerIds, setSelectedSellerIds] = useState<string[]>([]);
+  const effectiveSelectedSellerIds = selectedSellerIds.length === 0 ? SELLER_IDS : selectedSellerIds;
+
+  const effectiveSellerIds = useMemo(
+    () => (isAdmin ? effectiveSelectedSellerIds : currentUser?.id ? [currentUser.id] : []),
+    [currentUser?.id, isAdmin, effectiveSelectedSellerIds],
+  );
+  const allSellersSelected = isAdmin && effectiveSellerIds.length === SELLER_IDS.length && SELLER_IDS.length > 0;
   const sellerParam = allSellersSelected ? "all" : effectiveSellerIds.join(",");
-  const multiplier = allSellersSelected
-    ? 1
-    : effectiveSellerIds.reduce((sum, id) => sum + (sellerMultipliers[id] ?? 1), 0) / Math.max(effectiveSellerIds.length, 1);
   const sellerFilterLabel = allSellersSelected
     ? "Todas vendedoras"
     : effectiveSellerIds.length === 1
-      ? SELLERS.find(s => s.id === effectiveSellerIds[0])?.name ?? currentUser?.name ?? "1 vendedora"
+      ? sellers.find(s => s.id === effectiveSellerIds[0])?.name ?? currentUser?.name ?? "1 vendedora"
       : `${effectiveSellerIds.length} vendedoras`;
-  const filteredDeals = useMemo(
-    () => deals.filter(deal => canViewDeal(deal) && (allSellersSelected || effectiveSellerIds.includes(deal.sellerId))),
-    [allSellersSelected, canViewDeal, deals, effectiveSellerIds]
-  );
 
-  const series = useMemo(() => (
-    period === "today"
-      ? buildHourlySeries(multiplier)
-      : MONTHLY_SERIES.slice(-days).map((item) => ({
-      label: item.day,
-      atendimentos: Math.max(1, Math.round(item.atendimentos * multiplier)),
-      vendas: Math.max(0, Math.round(item.vendas * multiplier * 0.96)),
-    }))
-  ), [days, multiplier, period]);
+  const metrics = useDashboardMetrics({
+    period,
+    sellerIds: effectiveSellerIds,
+    allSellersSelected,
+    customStart,
+    customEnd,
+  });
 
-  const previousSeries = useMemo(() => {
-    if (period === "today") {
-      return buildHourlySeries(multiplier * 0.88);
-    }
+  const { series, previousSeries, totals, previousTotals, refusal, ranking, critical, messagesLoading } = metrics;
 
-    const previousWindow = MONTHLY_SERIES.slice(-(days * 2), -days);
-    const source = previousWindow.length === days
-      ? previousWindow
-      : MONTHLY_SERIES.slice(-days).map(item => ({
-        ...item,
-        atendimentos: Math.round(item.atendimentos * 0.9),
-        vendas: Math.round(item.vendas * 0.84),
-      }));
+  const metricDeltas = useMemo(() => {
+    const avg = totals.avgResponseSeconds;
+    const prevAvg = previousTotals.avgResponseSeconds;
+    return {
+      atendimentos: buildMetricDelta(totals.atendimentos, previousTotals.atendimentos),
+      resposta: avg !== null && prevAvg !== null
+        ? buildMetricDelta(Math.round(avg), Math.round(prevAvg), v => `${formatSignedInteger(v)}s`)
+        : { percent: "0.0%", value: "—", positive: true },
+      unread: buildMetricDelta(totals.unread, previousTotals.unread),
+      revenue: buildMetricDelta(totals.revenue, previousTotals.revenue, formatSignedBRL),
+      conversion: buildMetricDelta(
+        Number(totals.conversionPct.toFixed(1)),
+        Number(previousTotals.conversionPct.toFixed(1)),
+        v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}pp`,
+      ),
+      quente: buildMetricDelta(totals.temp.quente, previousTotals.temp.quente),
+      morno: buildMetricDelta(totals.temp.morno, previousTotals.temp.morno),
+      frio: buildMetricDelta(totals.temp.frio, previousTotals.temp.frio),
+    };
+  }, [totals, previousTotals]);
 
-    return source.map((item) => ({
-      label: item.day,
-      atendimentos: Math.max(1, Math.round(item.atendimentos * multiplier)),
-      vendas: Math.max(0, Math.round(item.vendas * multiplier * 0.96)),
-    }));
-  }, [days, multiplier, period]);
-
-  const tempCounts = useMemo(() => ({
-    quente: filteredDeals.filter(d => d.temperature === "quente").length,
-    morno: filteredDeals.filter(d => d.temperature === "morno").length,
-    frio: filteredDeals.filter(d => d.temperature === "frio").length,
-  }), [filteredDeals]);
-
-  const totalAtendimentos = series.reduce((sum, item) => sum + item.atendimentos, 0);
-  const totalVendas = series.reduce((sum, item) => sum + item.vendas, 0);
-  const previousAtendimentos = previousSeries.reduce((sum, item) => sum + item.atendimentos, 0);
-  const previousVendas = previousSeries.reduce((sum, item) => sum + item.vendas, 0);
-  const revenue = filteredDeals.reduce((sum, item) => sum + (item.estimatedValue || 0), 0) * multiplier;
-  const previousRevenue = revenue * 0.86;
-  const conversion = totalAtendimentos ? ((totalVendas / totalAtendimentos) * 100).toFixed(1) : "0.0";
-  const previousConversion = previousAtendimentos ? (previousVendas / previousAtendimentos) * 100 : 0;
-  const unread = filteredDeals.filter(d => d.unread).length;
-  const previousUnread = Math.max(0, unread - Math.max(1, Math.round(days / 14)));
-  const previousTempCounts = {
-    quente: Math.max(0, tempCounts.quente - Math.max(1, Math.round(days / 10))),
-    morno: Math.max(0, tempCounts.morno - (period === "30d" ? 4 : Math.max(1, Math.round(days / 7)))),
-    frio: tempCounts.frio + Math.max(1, Math.round(days / 20)),
-  };
-  const metricDeltas = {
-    atendimentos: buildMetricDelta(totalAtendimentos, previousAtendimentos),
-    resposta: buildMetricDelta(Math.max(1, Math.round(198 / multiplier)), Math.max(1, Math.round(224 / multiplier)), value => `${formatSignedInteger(value)}s`),
-    unread: buildMetricDelta(unread, previousUnread),
-    revenue: buildMetricDelta(revenue, previousRevenue, formatSignedBRL),
-    conversion: buildMetricDelta(Number(conversion), previousConversion, value => `${value >= 0 ? "+" : ""}${value.toFixed(1)}pp`),
-    quente: buildMetricDelta(tempCounts.quente, previousTempCounts.quente),
-    morno: buildMetricDelta(tempCounts.morno, previousTempCounts.morno),
-    frio: buildMetricDelta(tempCounts.frio, previousTempCounts.frio),
-  };
-
-  const ranking = useMemo(() => (
-    allSellersSelected ? SELLER_RANKING : SELLER_RANKING.filter(s => effectiveSellerIds.includes(s.id))
-  ), [allSellersSelected, effectiveSellerIds]);
-
-  const critical = filteredDeals
-    .filter(d => d.temperature === "quente")
-    .sort((a, b) => +new Date(a.lastInteraction) - +new Date(b.lastInteraction))
-    .slice(0, 5);
-  const refusalChartData = useMemo(() => (
-    REFUSAL_PIE.map(r => ({
-      ...r,
-      reason: refusalReasonParams[r.name] || r.name,
-      value: Math.round(r.value * multiplier),
-    }))
-  ), [multiplier]);
+  const conversionLabel = `${totals.conversionPct.toFixed(1)}%`;
+  const avgResponseLabel = totals.avgResponseSeconds !== null
+    ? formatSecondsAsMinSec(totals.avgResponseSeconds)
+    : (messagesLoading ? "…" : "—");
 
   const openRefusalReport = (reason: string) => {
     const params = new URLSearchParams({
@@ -213,22 +139,27 @@ export default function Dashboard() {
 
   const toggleSeller = (sellerId: string) => {
     setSelectedSellerIds(current => {
-      const next = current.includes(sellerId)
-        ? current.filter(id => id !== sellerId)
-        : [...current, sellerId];
-
-      return next.length ? next : current;
+      const base = current.length === 0 ? SELLER_IDS : current;
+      const next = base.includes(sellerId)
+        ? base.filter(id => id !== sellerId)
+        : [...base, sellerId];
+      return next.length ? next : base;
     });
   };
 
   const toggleAllSellers = () => {
-    setSelectedSellerIds(current => current.length === SELLER_IDS.length ? [SELLER_IDS[0]] : SELLER_IDS);
+    setSelectedSellerIds(current => {
+      const isAll = (current.length === 0 || current.length === SELLER_IDS.length);
+      return isAll ? (SELLER_IDS[0] ? [SELLER_IDS[0]] : []) : [];
+    });
   };
+
+  const days = period === "today" ? 1 : period === "7d" ? 7 : period === "30d" ? 30 : Math.max(1, series.length);
 
   return (
     <AppLayout title="Dashboard" subtitle="Visão geral do seu atendimento comercial">
       <div className="flex flex-wrap items-end gap-3 mb-6">
-        {isAdmin && <div>
+        {isAdmin && SELLER_IDS.length > 0 && <div>
           <Label className="text-xs text-muted-foreground">Atendente</Label>
           <Popover>
             <PopoverTrigger asChild>
@@ -243,9 +174,9 @@ export default function Dashboard() {
                 <span>Todas vendedoras</span>
               </label>
               <div className="my-1 h-px bg-border" />
-              {SELLERS.map(s => (
+              {sellers.map(s => (
                 <label key={s.id} className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-secondary">
-                  <Checkbox checked={selectedSellerIds.includes(s.id)} onCheckedChange={() => toggleSeller(s.id)} aria-label={`Selecionar ${s.name}`} />
+                  <Checkbox checked={effectiveSellerIds.includes(s.id)} onCheckedChange={() => toggleSeller(s.id)} aria-label={`Selecionar ${s.name}`} />
                   <span>{s.name}</span>
                 </label>
               ))}
@@ -277,14 +208,14 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <MetricCard onClick={() => navigate("/conversas")} icon={<MessageCircle className="w-5 h-5" />} label="Total de atendimentos" value={String(totalAtendimentos)} delta={metricDeltas.atendimentos.percent} deltaValue={metricDeltas.atendimentos.value} deltaPositive={metricDeltas.atendimentos.positive} accent="primary" />
-        <MetricCard onClick={() => navigate("/relatorios?report=vendedoras")} icon={<Clock className="w-5 h-5" />} label="Tempo médio de resposta" value={`${Math.max(1, Math.round(3 / multiplier))}m ${Math.round(18 / multiplier)}s`} delta={metricDeltas.resposta.percent} deltaValue={metricDeltas.resposta.value} deltaPositive={!metricDeltas.resposta.positive} accent="info" />
-        <MetricCard onClick={() => navigate("/conversas?status=sem-resposta")} icon={<AlertTriangle className="w-5 h-5" />} label="Conversas sem resposta" value={String(unread)} delta={metricDeltas.unread.percent} deltaValue={metricDeltas.unread.value} deltaPositive={false} accent="destructive" />
-        <MetricCard onClick={() => navigate("/relatorios?report=vendas&result=venda")} icon={<ShoppingBag className="w-5 h-5" />} label="Vendas realizadas" value={formatBRL(revenue)} delta={metricDeltas.revenue.percent} deltaValue={metricDeltas.revenue.value} deltaPositive={metricDeltas.revenue.positive} accent="success" />
-        <MetricCard onClick={() => navigate("/relatorios?report=kanban")} icon={<TrendingUp className="w-5 h-5" />} label="Taxa de conversão" value={`${conversion}%`} delta={metricDeltas.conversion.percent} deltaValue={metricDeltas.conversion.value} deltaPositive={metricDeltas.conversion.positive} accent="primary" />
-        <MetricCard onClick={() => navigate("/kanban?temp=quente")} icon={<Flame className="w-5 h-5" />} label="Clientes quentes" value={String(tempCounts.quente)} delta={metricDeltas.quente.percent} deltaValue={metricDeltas.quente.value} deltaPositive={metricDeltas.quente.positive} accent="destructive" />
-        <MetricCard onClick={() => navigate("/kanban?temp=morno")} icon={<Thermometer className="w-5 h-5" />} label="Clientes mornos" value={String(tempCounts.morno)} delta={metricDeltas.morno.percent} deltaValue={metricDeltas.morno.value} deltaPositive={metricDeltas.morno.positive} accent="warning" />
-        <MetricCard onClick={() => navigate("/kanban?temp=frio")} icon={<Snowflake className="w-5 h-5" />} label="Clientes frios" value={String(tempCounts.frio)} delta={metricDeltas.frio.percent} deltaValue={metricDeltas.frio.value} deltaPositive={false} accent="info" />
+        <MetricCard onClick={() => navigate("/conversas")} icon={<MessageCircle className="w-5 h-5" />} label="Total de atendimentos" value={String(totals.atendimentos)} delta={metricDeltas.atendimentos.percent} deltaValue={metricDeltas.atendimentos.value} deltaPositive={metricDeltas.atendimentos.positive} accent="primary" />
+        <MetricCard onClick={() => navigate("/relatorios?report=vendedoras")} icon={<Clock className="w-5 h-5" />} label="Tempo médio de resposta" value={avgResponseLabel} delta={metricDeltas.resposta.percent} deltaValue={metricDeltas.resposta.value} deltaPositive={!metricDeltas.resposta.positive} accent="info" />
+        <MetricCard onClick={() => navigate("/conversas?status=sem-resposta")} icon={<AlertTriangle className="w-5 h-5" />} label="Conversas sem resposta" value={String(totals.unread)} delta={metricDeltas.unread.percent} deltaValue={metricDeltas.unread.value} deltaPositive={false} accent="destructive" />
+        <MetricCard onClick={() => navigate("/relatorios?report=vendas&result=venda")} icon={<ShoppingBag className="w-5 h-5" />} label="Vendas realizadas" value={formatBRL(totals.revenue)} delta={metricDeltas.revenue.percent} deltaValue={metricDeltas.revenue.value} deltaPositive={metricDeltas.revenue.positive} accent="success" />
+        <MetricCard onClick={() => navigate("/relatorios?report=kanban")} icon={<TrendingUp className="w-5 h-5" />} label="Taxa de conversão" value={conversionLabel} delta={metricDeltas.conversion.percent} deltaValue={metricDeltas.conversion.value} deltaPositive={metricDeltas.conversion.positive} accent="primary" />
+        <MetricCard onClick={() => navigate("/kanban?temp=quente")} icon={<Flame className="w-5 h-5" />} label="Clientes quentes" value={String(totals.temp.quente)} delta={metricDeltas.quente.percent} deltaValue={metricDeltas.quente.value} deltaPositive={metricDeltas.quente.positive} accent="destructive" />
+        <MetricCard onClick={() => navigate("/kanban?temp=morno")} icon={<Thermometer className="w-5 h-5" />} label="Clientes mornos" value={String(totals.temp.morno)} delta={metricDeltas.morno.percent} deltaValue={metricDeltas.morno.value} deltaPositive={metricDeltas.morno.positive} accent="warning" />
+        <MetricCard onClick={() => navigate("/kanban?temp=frio")} icon={<Snowflake className="w-5 h-5" />} label="Clientes frios" value={String(totals.temp.frio)} delta={metricDeltas.frio.percent} deltaValue={metricDeltas.frio.value} deltaPositive={false} accent="info" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
@@ -316,35 +247,41 @@ export default function Dashboard() {
         <div className="card-elevated p-6">
           <h3 className="font-display font-bold text-base">Motivos de recusa</h3>
           <p className="text-xs text-muted-foreground mb-2">Por que perdemos vendas</p>
-          <ResponsiveContainer width="100%" height={230}>
-            <PieChart>
-              <Pie
-                data={refusalChartData}
-                dataKey="value"
-                innerRadius={50}
-                outerRadius={85}
-                paddingAngle={2}
-                cursor="pointer"
-                onClick={(entry) => openRefusalReport(entry.reason)}
-              >
-                {REFUSAL_PIE.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-              </Pie>
-              <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid hsl(var(--border))", background: "hsl(var(--card))" }} />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="mt-2 grid grid-cols-2 gap-1.5">
-            {refusalChartData.map((r, i) => (
-              <button
-                key={r.name}
-                type="button"
-                className="flex items-center gap-1.5 rounded-md text-left text-[11px] transition-colors hover:bg-secondary"
-                onClick={() => openRefusalReport(r.reason)}
-              >
-                <div className="w-2 h-2 rounded-full" style={{ background: PIE_COLORS[i % PIE_COLORS.length] }} />
-                <span className="text-muted-foreground truncate">{r.name}</span>
-              </button>
-            ))}
-          </div>
+          {refusal.length === 0 ? (
+            <div className="text-xs text-muted-foreground py-12 text-center">Nenhuma recusa registrada no período.</div>
+          ) : (
+            <>
+              <ResponsiveContainer width="100%" height={230}>
+                <PieChart>
+                  <Pie
+                    data={refusal}
+                    dataKey="value"
+                    innerRadius={50}
+                    outerRadius={85}
+                    paddingAngle={2}
+                    cursor="pointer"
+                    onClick={(entry) => openRefusalReport((entry as { reason: string }).reason)}
+                  >
+                    {refusal.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid hsl(var(--border))", background: "hsl(var(--card))" }} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="mt-2 grid grid-cols-2 gap-1.5">
+                {refusal.map((r, i) => (
+                  <button
+                    key={r.name}
+                    type="button"
+                    className="flex items-center gap-1.5 rounded-md text-left text-[11px] transition-colors hover:bg-secondary"
+                    onClick={() => openRefusalReport(r.reason)}
+                  >
+                    <div className="w-2 h-2 rounded-full" style={{ background: PIE_COLORS[i % PIE_COLORS.length] }} />
+                    <span className="text-muted-foreground truncate">{r.name}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -372,8 +309,8 @@ export default function Dashboard() {
                         <span className="font-semibold">{s.name}</span>
                       </div>
                     </td>
-                    <td className="py-3 font-semibold">{Math.round(s.atendimentos * multiplier)}</td>
-                    <td className="py-3 font-semibold text-success">{Math.round(s.vendas * multiplier)}</td>
+                    <td className="py-3 font-semibold">{s.atendimentos}</td>
+                    <td className="py-3 font-semibold text-success">{s.vendas}</td>
                     <td className="py-3">
                       <div className="flex items-center gap-2">
                         <div className="w-16 h-1.5 bg-secondary rounded-full overflow-hidden">
@@ -385,6 +322,9 @@ export default function Dashboard() {
                     <td className="py-3 text-muted-foreground">{s.tempoMedio}</td>
                   </tr>
                 ))}
+                {ranking.length === 0 && (
+                  <tr><td colSpan={5} className="py-6 text-center text-xs text-muted-foreground">Nenhuma vendedora ativa para este filtro.</td></tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -395,14 +335,13 @@ export default function Dashboard() {
           <p className="text-xs text-muted-foreground mb-4">Aguardando resposta</p>
           <div className="space-y-2.5">
             {critical.map(d => {
-              const assignedSeller = SELLERS.find(s => s.id === d.sellerId);
               const waitingTime = formatTimeWithoutResponse(d.lastInteraction);
               return (
                 <div key={d.id} className="p-3 rounded-xl bg-secondary/60 border border-border/40 hover:bg-secondary transition-colors">
                   <div className="flex items-start justify-between gap-2 mb-1.5">
                     <div className="min-w-0">
                       <div className="font-semibold text-sm truncate">{d.customer}</div>
-                      <div className="text-[11px] font-semibold text-foreground truncate">Vendedor: {assignedSeller?.name || "Sem responsável"}</div>
+                      <div className="text-[11px] font-semibold text-foreground truncate">Vendedor: {d.sellerName}</div>
                     </div>
                     <ClientTemperatureBadge temp={d.temperature} />
                   </div>
@@ -412,7 +351,7 @@ export default function Dashboard() {
                     <span>Sem resposta há {waitingTime}</span>
                   </div>
                   <Button size="sm" variant="ghost" className="h-7 text-xs px-2 -ml-2 text-primary hover:text-primary"
-                    onClick={() => navigate(`/conversas?deal=${d.id}`)}>
+                    onClick={() => navigate(d.dealId ? `/conversas?deal=${d.dealId}` : `/conversas?conversation=${d.id}`)}>
                     Abrir conversa <ChevronRight className="w-3 h-3 ml-1" />
                   </Button>
                 </div>

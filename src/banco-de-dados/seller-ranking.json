@@ -1,7 +1,0 @@
-[
-  { "id": "s1", "name": "Ana Paula", "avatar": "AP", "atendimentos": 94, "vendas": 31, "conversao": 33.0, "tempoMedio": "2m 08s" },
-  { "id": "s2", "name": "Camila Rocha", "avatar": "CR", "atendimentos": 87, "vendas": 27, "conversao": 31.0, "tempoMedio": "2m 31s" },
-  { "id": "s4", "name": "Beatriz Souza", "avatar": "BS", "atendimentos": 78, "vendas": 22, "conversao": 28.2, "tempoMedio": "3m 04s" },
-  { "id": "s5", "name": "Fernanda Lima", "avatar": "FL", "atendimentos": 72, "vendas": 19, "conversao": 26.4, "tempoMedio": "3m 22s" },
-  { "id": "s3", "name": "Juliana Martins", "avatar": "JM", "atendimentos": 69, "vendas": 17, "conversao": 24.6, "tempoMedio": "3m 45s" }
-]

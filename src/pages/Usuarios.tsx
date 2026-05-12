@@ -7,14 +7,10 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useCRM } from "@/store/crm-store";
-import { MessageSquare, ShieldCheck, Smartphone, Tags, UserCheck } from "lucide-react";
+import { useInstances } from "@/hooks/useInstances";
+import { whatsappApi } from "@/lib/whatsapp-api";
+import { MessageSquare, ShieldCheck, Smartphone, Tags } from "lucide-react";
 import { toast } from "sonner";
-
-const INSTANCE_OPTIONS = [
-  { id: "wa-01", name: "WhatsApp Principal", phone: "+55 11 98888-0101" },
-  { id: "wa-02", name: "WhatsApp Comercial 2", phone: "+55 11 97777-0202" },
-  { id: "wa-03", name: "WhatsApp Pós-venda", phone: "+55 11 96666-0303" },
-];
 
 const ROLE_PROFILES = [
   { name: "Admin", role: "Administrador", desc: "Acesso total ao sistema." },
@@ -24,14 +20,20 @@ const ROLE_PROFILES = [
 ];
 
 export default function Usuarios() {
-  const { teamUsers, setTeamUsers, deals, tags, hasPermission, currentUser } = useCRM();
+  const { teamUsers, refreshTeamUsers, deals, tags, hasPermission, currentUser } = useCRM();
+  const { instances } = useInstances();
   const configurableUsers = useMemo(() => teamUsers.filter(user => user.role !== "Administrador"), [teamUsers]);
   const [selectedUserId, setSelectedUserId] = useState(configurableUsers[0]?.id || "");
   const selectedUser = teamUsers.find(user => user.id === selectedUserId) || configurableUsers[0];
 
-  const patchSelectedUser = (patch: Partial<typeof selectedUser>) => {
+  const patchSelectedUser = async (patch: Partial<typeof selectedUser>) => {
     if (!selectedUser) return;
-    setTeamUsers(current => current.map(user => user.id === selectedUser.id ? { ...user, ...patch } : user));
+    try {
+      await whatsappApi.updateUser(selectedUser.id, patch);
+      await refreshTeamUsers();
+    } catch (err) {
+      toast.error(`Falha ao atualizar: ${(err as Error).message}`);
+    }
   };
 
   const toggleListValue = (key: "allowedTags" | "allowedConversationIds" | "allowedInstanceIds", value: string) => {
@@ -119,7 +121,7 @@ export default function Usuarios() {
                         )}
                       </div>
                     </td>
-                    <td className="px-5 py-3 text-muted-foreground">{currentUser?.id === user.id ? "Agora" : user.id === "admin" ? "Hoje" : "Ontem"}</td>
+                    <td className="px-5 py-3 text-muted-foreground">{currentUser?.id === user.id ? "Agora" : "—"}</td>
                     <td className="px-5 py-3">{userDeals.length}</td>
                     <td className="px-5 py-3">{userDeals.filter(deal => deal.stage === "fechado").length}</td>
                   </tr>
@@ -226,20 +228,21 @@ export default function Usuarios() {
               Controle quais canais o vendedor pode usar quando a integração estiver conectada.
             </div>
             <div className="space-y-2">
-              {INSTANCE_OPTIONS.map(instance => (
+              {instances.map(instance => (
                 <label key={instance.id} className="flex cursor-pointer items-start gap-2 rounded-xl border border-border/70 bg-background p-3 hover:bg-secondary">
                   <Checkbox checked={(selectedUser.allowedInstanceIds || []).includes(instance.id)} onCheckedChange={() => toggleListValue("allowedInstanceIds", instance.id)} />
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium">{instance.name}</span>
-                    <span className="block truncate text-xs text-muted-foreground">{instance.phone}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{instance.phone || "—"}</span>
                   </span>
                 </label>
               ))}
+              {instances.length === 0 && (
+                <div className="rounded-xl border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                  Nenhuma instância cadastrada. Adicione em Instâncias para liberar acesso por canal.
+                </div>
+              )}
             </div>
-
-            <Button className="mt-5 w-full gap-2 bg-gradient-primary" onClick={() => toast.success("Permissões de usuário salvas")}>
-              <UserCheck className="h-4 w-4" /> Salvar permissões
-            </Button>
           </section>
         </div>
       )}

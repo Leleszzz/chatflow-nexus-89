@@ -3,6 +3,14 @@ import { Navigate } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { useCRM } from "@/store/crm-store";
+import { useLeadAutomation } from "@/hooks/useLeadAutomation";
+import { useAgentAutoReply } from "@/hooks/useAgentAutoReply";
+
+function LeadAutomationRunner() {
+  useLeadAutomation();
+  useAgentAutoReply();
+  return null;
+}
 
 export function AppLayout({ children, title, subtitle }: { children: ReactNode; title: string; subtitle?: string }) {
   const { currentUser, authReady } = useCRM();
@@ -13,6 +21,7 @@ export function AppLayout({ children, title, subtitle }: { children: ReactNode; 
 
   return (
     <div className="flex min-h-screen w-full bg-background">
+      <LeadAutomationRunner />
       <Sidebar />
       {mobileSidebarOpen && (
         <div className="fixed inset-0 z-50 md:hidden">

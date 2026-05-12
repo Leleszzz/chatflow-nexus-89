@@ -7,7 +7,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCRM } from "@/store/crm-store";
 import { cn } from "@/lib/utils";
 import { BadgeCheck, Download, MessageSquareText, Pause, Play, RotateCcw, Search, Send, Square, X } from "lucide-react";
@@ -182,7 +181,6 @@ export default function Campanhas() {
   const [lastContact, setLastContact] = useState("all");
   const [returnStatus, setReturnStatus] = useState("all");
   const [message, setMessage] = useState("Oi {{nome_cliente}}, tudo bem? Vi que nosso ultimo contato ficou em aberto e queria saber se ainda posso te ajudar pelo WhatsApp {{numero_cliente}}.");
-  const [tab, setTab] = useState("remarketing");
   const [selectedDealIds, setSelectedDealIds] = useState<string[]>([]);
   const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
   const [customerPickerSearch, setCustomerPickerSearch] = useState("");
@@ -299,15 +297,6 @@ export default function Campanhas() {
 
   return (
     <AppLayout title="Campanhas" subtitle="Crie listas de remarketing e acompanhe respostas">
-      <Tabs value={tab} onValueChange={setTab} className="mb-6">
-        <TabsList className="h-auto flex-wrap bg-card">
-          <TabsTrigger value="remarketing">Remarketing</TabsTrigger>
-          <TabsTrigger value="manual">Disparo manual</TabsTrigger>
-          <TabsTrigger value="templates">Templates</TabsTrigger>
-          <TabsTrigger value="historico">Histórico</TabsTrigger>
-          <TabsTrigger value="resultados">Resultados</TabsTrigger>
-        </TabsList>
-      </Tabs>
       <section className="card-elevated mb-6 p-6">
         <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>

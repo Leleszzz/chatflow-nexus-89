@@ -4,6 +4,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CRMProvider } from "@/store/crm-store";
+import { startResourceReporter } from "@/lib/resource-reporter";
 import Dashboard from "./pages/Dashboard";
 import Kanban from "./pages/Kanban";
 import Conversas from "./pages/Conversas";
@@ -15,10 +16,13 @@ import DisparoEmMassa from "./pages/DisparoEmMassa";
 import Relatorios from "./pages/Relatorios";
 import Usuarios from "./pages/Usuarios";
 import Configuracoes from "./pages/Configuracoes";
+import Prontuarios from "./pages/Prontuarios";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound.tsx";
 
 const queryClient = new QueryClient();
+
+startResourceReporter();
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -33,6 +37,7 @@ const App = () => (
             <Route path="/kanban" element={<Kanban />} />
             <Route path="/conversas" element={<Conversas />} />
             <Route path="/calendario" element={<Calendario />} />
+            <Route path="/prontuarios" element={<Prontuarios />} />
             <Route path="/agentes" element={<Agentes />} />
             <Route path="/instancias" element={<Instancias />} />
             <Route path="/campanhas" element={<Campanhas />} />

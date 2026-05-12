@@ -1,0 +1,29 @@
+{
+  "name": "chatflow-nexus-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon --watch src --ext js,json --ignore data --ignore node_modules --delay 500ms src/server.js"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.16",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "ffmpeg-static": "^5.3.0",
+    "mime-types": "^2.1.35",
+    "multer": "^2.0.1",
+    "nanoid": "^5.0.7",
+    "pino": "^9.5.0",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1",
+    "vite_react_shadcn_ts": "file:.."
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  }
+}

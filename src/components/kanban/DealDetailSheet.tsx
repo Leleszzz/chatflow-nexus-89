@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { useCRM } from "@/store/crm-store";
 import { ClientTemperatureBadge, TagBadge } from "@/components/shared/Badges";
-import { CalendarClock, CheckCircle2, Clock3, MessageCircle, Plus, Trash2, UserRound } from "lucide-react";
+import { CalendarClock, CheckCircle2, Clock3, FolderOpen, MessageCircle, Plus, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
 const appointmentDateTime = (date: string, time: string) => new Date(`${date}T${time}`).getTime();
@@ -22,7 +22,7 @@ const formatAppointmentDate = (date: string) => {
 export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
   deal: Deal | null; open: boolean; onOpenChange: (v: boolean) => void; onFinish: () => void;
 }) {
-  const { updateDeal, tags, setTags, teamUsers, isAdmin, appointments } = useCRM();
+  const { updateDeal, removeDeal, tags, setTags, teamUsers, isAdmin, appointments, getProntuariosByDeal } = useCRM();
   const [newTag, setNewTag] = useState("");
   const navigate = useNavigate();
 
@@ -66,6 +66,13 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
     setTags(prev => prev.filter(item => item !== tag));
     updateDeal(deal.id, { tags: deal.tags.filter(item => item !== tag) });
     toast.success("Tag excluída");
+  };
+
+  const handleDeleteDeal = () => {
+    if (!window.confirm(`Excluir o card de ${deal.customer}? Esta acao tambem remove agendamentos vinculados.`)) return;
+    removeDeal(deal.id);
+    toast.success("Card excluido");
+    onOpenChange(false);
   };
 
   const renderAppointmentCard = (appointment: typeof leadAppointments[number], compact = false) => {
@@ -136,19 +143,39 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
                   <UserRound className="w-5 h-5 text-primary" /> Detalhes do lead
                 </DialogTitle>
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="shrink-0 gap-2 border-success/30 text-success hover:text-success"
-                title="Abrir conversa no WhatsApp"
-                onClick={() => {
-                  onOpenChange(false);
-                  navigate(`/conversas?deal=${deal.id}`);
-                }}
-              >
-                <MessageCircle className="w-4 h-4" />
-                Abrir conversa
-              </Button>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-2"
+                  title="Abrir prontuário do cliente"
+                  onClick={() => {
+                    onOpenChange(false);
+                    navigate(`/prontuarios?dealId=${deal.id}`);
+                  }}
+                >
+                  <FolderOpen className="w-4 h-4" />
+                  Prontuário
+                  {getProntuariosByDeal(deal.id).length > 0 && (
+                    <span className="ml-1 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground">
+                      {getProntuariosByDeal(deal.id).length}
+                    </span>
+                  )}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-2 border-success/30 text-success hover:text-success"
+                  title="Abrir conversa no WhatsApp"
+                  onClick={() => {
+                    onOpenChange(false);
+                    navigate(`/conversas?deal=${deal.id}`);
+                  }}
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  Abrir conversa
+                </Button>
+              </div>
             </div>
           </DialogHeader>
 
@@ -252,10 +279,17 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
           </div>
 
           <DialogFooter className="mt-6">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>Fechar</Button>
-            <Button className="bg-gradient-primary text-primary-foreground gap-2" onClick={onFinish}>
-              <CheckCircle2 className="w-4 h-4" /> Concluir atendimento
-            </Button>
+            <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+              <Button variant="destructive" className="gap-2" onClick={handleDeleteDeal}>
+                <Trash2 className="w-4 h-4" /> Excluir card
+              </Button>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <Button variant="outline" onClick={() => onOpenChange(false)}>Fechar</Button>
+                <Button className="bg-gradient-primary text-primary-foreground gap-2" onClick={onFinish}>
+                  <CheckCircle2 className="w-4 h-4" /> Concluir atendimento
+                </Button>
+              </div>
+            </div>
           </DialogFooter>
         </div>
       </DialogContent>
