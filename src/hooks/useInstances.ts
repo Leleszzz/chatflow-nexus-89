@@ -7,6 +7,7 @@ export function useInstances() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [qrByInstance, setQrByInstance] = useState<Record<string, string>>({});
+  const [pairingCodeByInstance, setPairingCodeByInstance] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
     try {
@@ -36,10 +37,18 @@ export function useInstances() {
           delete next[payload.instanceId];
           return next;
         });
+        setPairingCodeByInstance(curr => {
+          const next = { ...curr };
+          delete next[payload.instanceId];
+          return next;
+        });
       }
     };
     const onQr = (payload: { instanceId: string; qr: string }) => {
       setQrByInstance(curr => ({ ...curr, [payload.instanceId]: payload.qr }));
+    };
+    const onPairingCode = (payload: { instanceId: string; code: string }) => {
+      setPairingCodeByInstance(curr => ({ ...curr, [payload.instanceId]: payload.code }));
     };
     const onReady = (payload: { instanceId: string; phone: string }) => {
       setInstances(curr => curr.map(i => i.id === payload.instanceId
@@ -54,12 +63,14 @@ export function useInstances() {
 
     socket.on("instance:status", onStatus);
     socket.on("instance:qr", onQr);
+    socket.on("instance:pairing-code", onPairingCode);
     socket.on("instance:ready", onReady);
     socket.on("instance:sync-progress", onSyncProgress);
 
     return () => {
       socket.off("instance:status", onStatus);
       socket.off("instance:qr", onQr);
+      socket.off("instance:pairing-code", onPairingCode);
       socket.off("instance:ready", onReady);
       socket.off("instance:sync-progress", onSyncProgress);
     };
@@ -92,6 +103,11 @@ export function useInstances() {
       delete next[id];
       return next;
     });
+    setPairingCodeByInstance(curr => {
+      const next = { ...curr };
+      delete next[id];
+      return next;
+    });
   }, []);
 
   const renameInstance = useCallback(async (id: string, name: string) => {
@@ -110,5 +126,12 @@ export function useInstances() {
     }
   }, []);
 
-  return { instances, loading, error, qrByInstance, refresh, createInstance, restartInstance, resyncHistory, deleteInstance, fetchQr, renameInstance };
+  const requestPairingCode = useCallback(async (id: string, phone: string) => {
+    const { code } = await whatsappApi.requestPairingCode(id, phone);
+    setPairingCodeByInstance(curr => ({ ...curr, [id]: code }));
+    setInstances(curr => curr.map(i => i.id === id ? { ...i, status: "codigo-pendente" as InstanceStatus } : i));
+    return code;
+  }, []);
+
+  return { instances, loading, error, qrByInstance, pairingCodeByInstance, refresh, createInstance, restartInstance, resyncHistory, deleteInstance, fetchQr, requestPairingCode, renameInstance };
 }

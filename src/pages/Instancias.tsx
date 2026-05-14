@@ -7,7 +7,7 @@ import { useCRM } from "@/store/crm-store";
 import { useInstances } from "@/hooks/useInstances";
 import { InstanceStatus } from "@/lib/whatsapp-api";
 import { cn } from "@/lib/utils";
-import { Cable, Check, DownloadCloud, MessageSquare, Pencil, Power, QrCode, RefreshCcw, Smartphone, Trash2, Wifi, WifiOff, Loader2, X } from "lucide-react";
+import { Cable, Check, DownloadCloud, KeyRound, MessageSquare, Pencil, Power, QrCode, RefreshCcw, Smartphone, Trash2, Wifi, WifiOff, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 
 const statusConfig: Record<InstanceStatus, { label: string; className: string; icon: typeof Wifi }> = {
@@ -16,6 +16,7 @@ const statusConfig: Record<InstanceStatus, { label: string; className: string; i
   desligada: { label: "Desligada", className: "bg-muted text-muted-foreground", icon: Power },
   conectando: { label: "Conectando", className: "bg-info-soft text-info", icon: Loader2 },
   "qr-pendente": { label: "Aguardando QR", className: "bg-warning-soft text-warning", icon: QrCode },
+  "codigo-pendente": { label: "Aguardando código", className: "bg-warning-soft text-warning", icon: KeyRound },
 };
 
 const formatDateTime = (value: string) =>
@@ -25,7 +26,7 @@ const formatDateTime = (value: string) =>
 
 export default function Instancias() {
   const { isAdmin } = useCRM();
-  const { instances, loading, error, qrByInstance, createInstance, restartInstance, resyncHistory, deleteInstance, fetchQr, renameInstance } = useInstances();
+  const { instances, loading, error, qrByInstance, pairingCodeByInstance, createInstance, restartInstance, resyncHistory, deleteInstance, fetchQr, requestPairingCode, renameInstance } = useInstances();
   const [resyncingId, setResyncingId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -33,6 +34,9 @@ export default function Instancias() {
   const [qrInstanceId, setQrInstanceId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState("");
+  const [connectMode, setConnectMode] = useState<"qr" | "code">("qr");
+  const [phoneDraft, setPhoneDraft] = useState("");
+  const [requestingCode, setRequestingCode] = useState(false);
 
   const activeCount = instances.filter(instance => instance.status === "ativa").length;
   const totalConversations = instances.reduce((sum, instance) => sum + (instance.conversations || 0), 0);
@@ -101,7 +105,26 @@ export default function Instancias() {
 
   const openQr = async (id: string) => {
     setQrInstanceId(id);
+    setConnectMode("qr");
+    setPhoneDraft("");
     if (!qrByInstance[id]) await fetchQr(id);
+  };
+
+  const handleRequestCode = async (id: string) => {
+    const phone = phoneDraft.replace(/\D/g, "");
+    if (phone.length < 10) {
+      toast.error("Informe o número com DDI + DDD (somente dígitos). Ex.: 5511999998888");
+      return;
+    }
+    setRequestingCode(true);
+    try {
+      await requestPairingCode(id, phone);
+      toast.success("Código gerado — digite-o no WhatsApp");
+    } catch (err) {
+      toast.error(`Falha ao gerar código: ${(err as Error).message}`);
+    } finally {
+      setRequestingCode(false);
+    }
   };
 
   const startRename = (id: string, currentName: string) => {
@@ -127,6 +150,7 @@ export default function Instancias() {
 
   const qrInstance = qrInstanceId ? instances.find(i => i.id === qrInstanceId) : null;
   const qrDataUrl = qrInstanceId ? qrByInstance[qrInstanceId] : null;
+  const pairingCode = qrInstanceId ? pairingCodeByInstance[qrInstanceId] : null;
 
   return (
     <AppLayout title="Instancias" subtitle="Conecte e acompanhe canais de WhatsApp">
@@ -252,7 +276,7 @@ export default function Instancias() {
                     </div>
                   ) : (
                     <Button variant="outline" className="flex-1 gap-2" onClick={() => openQr(instance.id)}>
-                      <QrCode className="h-4 w-4" /> QR Code
+                      <QrCode className="h-4 w-4" /> Conectar
                     </Button>
                   )}
                   <Button variant="outline" size="icon" title="Reconectar" onClick={() => handleRestart(instance.id)}>
@@ -307,27 +331,89 @@ export default function Instancias() {
       <Dialog open={Boolean(qrInstanceId)} onOpenChange={open => !open && setQrInstanceId(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>QR Code — {qrInstance?.name}</DialogTitle>
+            <DialogTitle>Conectar — {qrInstance?.name}</DialogTitle>
           </DialogHeader>
-          <div className="flex flex-col items-center gap-3 py-2">
-            {qrInstance?.status === "ativa" ? (
-              <div className="rounded-xl bg-success-soft p-6 text-center text-sm text-success">
-                Instância já está conectada ({qrInstance.phone}).
+          {qrInstance?.status === "ativa" ? (
+            <div className="rounded-xl bg-success-soft p-6 text-center text-sm text-success">
+              Instância já está conectada ({qrInstance.phone}).
+            </div>
+          ) : (
+            <>
+              <div className="flex gap-1 rounded-lg bg-secondary p-1">
+                <button
+                  type="button"
+                  onClick={() => setConnectMode("qr")}
+                  className={cn(
+                    "flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition",
+                    connectMode === "qr" ? "bg-background shadow-sm" : "text-muted-foreground",
+                  )}
+                >
+                  <QrCode className="h-3.5 w-3.5" /> QR Code
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConnectMode("code")}
+                  className={cn(
+                    "flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition",
+                    connectMode === "code" ? "bg-background shadow-sm" : "text-muted-foreground",
+                  )}
+                >
+                  <KeyRound className="h-3.5 w-3.5" /> Código
+                </button>
               </div>
-            ) : qrDataUrl ? (
-              <>
-                <img src={qrDataUrl} alt="QR Code" className="h-72 w-72 rounded-xl border" />
-                <p className="text-center text-xs text-muted-foreground">
-                  WhatsApp &gt; Aparelhos conectados &gt; Conectar aparelho.<br/>
-                  O QR atualiza automaticamente.
-                </p>
-              </>
-            ) : (
-              <div className="flex h-72 w-72 items-center justify-center rounded-xl border bg-secondary text-sm text-muted-foreground">
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Gerando QR...
-              </div>
-            )}
-          </div>
+
+              {connectMode === "qr" ? (
+                <div className="flex flex-col items-center gap-3 py-2">
+                  {qrDataUrl ? (
+                    <>
+                      <img src={qrDataUrl} alt="QR Code" className="h-72 w-72 rounded-xl border" />
+                      <p className="text-center text-xs text-muted-foreground">
+                        WhatsApp &gt; Aparelhos conectados &gt; Conectar aparelho.<br/>
+                        O QR atualiza automaticamente.
+                      </p>
+                    </>
+                  ) : (
+                    <div className="flex h-72 w-72 items-center justify-center rounded-xl border bg-secondary text-sm text-muted-foreground">
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Gerando QR...
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3 py-2">
+                  {pairingCode ? (
+                    <div className="flex flex-col items-center gap-2 rounded-xl border bg-secondary p-6">
+                      <span className="text-[10px] font-semibold uppercase text-muted-foreground">Seu código</span>
+                      <span className="font-mono text-3xl font-bold tracking-[0.3em]">{pairingCode}</span>
+                      <p className="text-center text-xs text-muted-foreground">
+                        WhatsApp &gt; Aparelhos conectados &gt; Conectar aparelho &gt; Conectar com número de telefone.
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Informe o número da conta de WhatsApp com DDI + DDD (somente dígitos) para gerar um código de pareamento.
+                    </p>
+                  )}
+                  <div className="flex gap-2">
+                    <Input
+                      value={phoneDraft}
+                      onChange={e => setPhoneDraft(e.target.value)}
+                      placeholder="Ex.: 5511999998888"
+                      inputMode="numeric"
+                      onKeyDown={e => e.key === "Enter" && qrInstanceId && handleRequestCode(qrInstanceId)}
+                    />
+                    <Button
+                      onClick={() => qrInstanceId && handleRequestCode(qrInstanceId)}
+                      disabled={requestingCode}
+                      className="gap-2 shrink-0"
+                    >
+                      {requestingCode && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {pairingCode ? "Gerar outro" : "Gerar código"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </AppLayout>
