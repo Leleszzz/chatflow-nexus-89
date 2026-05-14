@@ -5,7 +5,7 @@ import { getClient } from "../whatsapp/instance-manager.js";
 import { saveMedia } from "../storage/media-repo.js";
 import { appendMessage, nextOutgoingTimestamp } from "../storage/messages-repo.js";
 import { upsertConversation, getConversation } from "../storage/conversations-repo.js";
-import { mapChatFromBaileys, mapBaileysStatusToAck, buildConversationId, previewFor } from "../whatsapp/message-mapper.js";
+import { mapChatFromBaileys, ackForSentResult, buildConversationId, previewFor } from "../whatsapp/message-mapper.js";
 import { emitToInstance } from "../socket/events.js";
 import { convertToOggOpus, isOggOpus } from "../whatsapp/audio-convert.js";
 
@@ -78,7 +78,7 @@ sendRouter.post("/:id/send", upload.single("file"), async (req, res) => {
     const messageId = result?.key?.id || null;
     const baileysTs = Number(result?.messageTimestamp);
     const timestamp = await nextOutgoingTimestamp(instanceId, chatId, baileysTs);
-    const initialAck = mapBaileysStatusToAck(result?.status);
+    const initialAck = ackForSentResult(result?.status);
 
     if (messageId) {
       const stored = {

@@ -164,13 +164,20 @@ export function mapBaileysStatusToAck(status) {
   return 0;
 }
 
+export function ackForSentResult(status) {
+  const ack = mapBaileysStatusToAck(status);
+  return ack > 0 ? ack : 1;
+}
+
 export function mapMessage(msg, { instanceId, mediaUrl, mediaMime } = {}) {
   const content = extractContent(msg);
   const type = messageTypeOf(content);
   const body = bodyOf(content);
   const contacts = contactsOf(content);
   const isGif = Boolean(content.videoMessage?.gifPlayback);
-  const ack = mapBaileysStatusToAck(msg.status);
+  const ack = msg.key?.fromMe && typeof msg.status !== "number"
+    ? 1
+    : mapBaileysStatusToAck(msg.status);
   const ts = Number(msg.messageTimestamp);
   return {
     id: msg.key?.id || "",

@@ -139,6 +139,7 @@ export async function createClient({ instanceId, io, onConnectionClose }) {
   const chatsById = new Map();
   const contactsByJid = new Map();
   let lastQrDataUrl = null;
+  let lastPairingCode = null;
   let historyTotal = 0;
   let historyDone = 0;
   let ownJid = null;
@@ -283,6 +284,23 @@ export async function createClient({ instanceId, io, onConnectionClose }) {
     _io: io,
     instanceId,
     getQrDataUrl: () => lastQrDataUrl,
+    getPairingCode: () => lastPairingCode,
+    isRegistered: () => Boolean(state.creds?.registered),
+    requestPairingCode: async (phoneNumber) => {
+      const digits = String(phoneNumber || "").replace(/\D/g, "");
+      if (!digits || digits.length < 10) {
+        throw new Error("número inválido — informe DDI + DDD + número, somente dígitos");
+      }
+      if (state.creds?.registered) {
+        throw new Error("instância já está registrada");
+      }
+      const code = await sock.requestPairingCode(digits);
+      lastPairingCode = code;
+      await patchInstance(instanceId, { status: "codigo-pendente" });
+      emitToInstance(io, instanceId, "instance:pairing-code", { instanceId, code });
+      emitToInstance(io, instanceId, "instance:status", { instanceId, status: "codigo-pendente" });
+      return code;
+    },
     sendMessage: (jid, content, options) => sock.sendMessage(jid, content, options),
     getChatById: (jid) => chatsById.get(jid) || null,
     getProfilePicUrl: async (jid) => {
@@ -330,10 +348,14 @@ export async function createClient({ instanceId, io, onConnectionClose }) {
           phone,
           firstConnectedAt,
           lastSync: stored?.lastSync || firstConnectedAt,
+          // primeira conexão: desativa o filtro por timestamp para capturar
+          // 100% do histórico que o aparelho conseguir entregar
+          ...(isFreshPair ? { fullHistoryRequested: true } : {}),
         });
         emitToInstance(io, instanceId, "instance:ready", { instanceId, phone });
         emitToInstance(io, instanceId, "instance:status", { instanceId, status: "ativa", phone });
         lastQrDataUrl = null;
+        lastPairingCode = null;
         console.log(`[${instanceId}] connection open, phone=${phone}${isFreshPair ? " (fresh pair — full history sync incoming)" : ""}`);
       } catch (err) {
         console.error(`[${instanceId}] open handler crashed:`, err);
@@ -578,8 +600,10 @@ export async function createClient({ instanceId, io, onConnectionClose }) {
         if (!added) {
           // já persistida (provavelmente pelo send.js); sincroniza ack se mudou
           if (stored.ack > 0) {
-            await updateMessageAck(instanceId, jid, stored.id, stored.ack);
-            emitToInstance(io, instanceId, "message:ack", { messageId: stored.id, chatId: jid, ack: stored.ack });
+            const ackUpdated = await updateMessageAck(instanceId, jid, stored.id, stored.ack);
+            if (ackUpdated) {
+              emitToInstance(io, instanceId, "message:ack", { messageId: stored.id, chatId: jid, ack: stored.ack });
+            }
             const convPrior = await getConversation(buildConversationId(instanceId, jid));
             if (convPrior && convPrior.lastMessageId === stored.id && (convPrior.lastMessageAck ?? 0) < stored.ack) {
               const updated = await upsertConversation({ ...convPrior, lastMessageAck: stored.ack });
@@ -625,16 +649,18 @@ export async function createClient({ instanceId, io, onConnectionClose }) {
     for (const u of updates) {
       try {
         const messageId = u.key?.id;
-        const jid = u.key?.remoteJid;
+        const jid = canonicalJid(u.key?.remoteJid);
         if (!messageId || !jid) continue;
         const statusRaw = u.update?.status;
         if (typeof statusRaw !== "number") continue;
         const ack = mapBaileysStatusToAck(statusRaw);
-        await updateMessageAck(instanceId, jid, messageId, ack);
-        emitToInstance(io, instanceId, "message:ack", { messageId, chatId: jid, ack });
+        const ackUpdated = await updateMessageAck(instanceId, jid, messageId, ack);
+        if (ackUpdated) {
+          emitToInstance(io, instanceId, "message:ack", { messageId, chatId: jid, ack });
+        }
 
         const conv = await getConversation(buildConversationId(instanceId, jid));
-        if (conv && conv.lastMessageId === messageId) {
+        if (conv && conv.lastMessageId === messageId && (conv.lastMessageAck ?? 0) < ack) {
           const updated = await upsertConversation({ ...conv, lastMessageAck: ack });
           emitToInstance(io, instanceId, "conversation:update", { conversation: updated });
         }

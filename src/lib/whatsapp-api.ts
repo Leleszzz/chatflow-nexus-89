@@ -1,4 +1,4 @@
-export type InstanceStatus = "ativa" | "desconectada" | "desligada" | "conectando" | "qr-pendente";
+export type InstanceStatus = "ativa" | "desconectada" | "desligada" | "conectando" | "qr-pendente" | "codigo-pendente";
 
 export type WhatsAppInstance = {
   id: string;
@@ -115,6 +115,13 @@ export const whatsappApi = {
       body: JSON.stringify(patch),
     }),
   getQr: (id: string) => request<{ qr: string }>(`/api/instances/${encodeURIComponent(id)}/qr`),
+  requestPairingCode: (id: string, phone: string) =>
+    request<{ code: string }>(`/api/instances/${encodeURIComponent(id)}/pairing-code`, {
+      method: "POST",
+      body: JSON.stringify({ phone }),
+    }),
+  getPairingCode: (id: string) =>
+    request<{ code: string }>(`/api/instances/${encodeURIComponent(id)}/pairing-code`),
   restartInstance: (id: string) =>
     request<{ ok: true }>(`/api/instances/${encodeURIComponent(id)}/restart`, { method: "POST" }),
   resyncHistory: (id: string) =>

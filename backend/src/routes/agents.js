@@ -6,7 +6,7 @@ import { listMessages, appendMessage, nextOutgoingTimestamp } from "../storage/m
 import { upsertConversation, getConversation } from "../storage/conversations-repo.js";
 import {
   mapChatFromBaileys,
-  mapBaileysStatusToAck,
+  ackForSentResult,
   buildConversationId,
   previewFor,
 } from "../whatsapp/message-mapper.js";
@@ -301,7 +301,7 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
   const messageId = result?.key?.id || null;
   const baileysTs = Number(result?.messageTimestamp);
   const timestamp = await nextOutgoingTimestamp(instanceId, chatId, baileysTs);
-  const initialAck = mapBaileysStatusToAck(result?.status);
+  const initialAck = ackForSentResult(result?.status);
 
   if (messageId) {
     const stored = {

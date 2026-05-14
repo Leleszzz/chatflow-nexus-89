@@ -62,6 +62,32 @@ instancesRouter.get("/:id/qr", async (req, res) => {
   res.json({ qr });
 });
 
+instancesRouter.post("/:id/pairing-code", async (req, res) => {
+  const inst = await getInstance(req.params.id);
+  if (!inst) return res.status(404).json({ error: "instância não encontrada" });
+  const phone = String(req.body?.phone || "").replace(/\D/g, "");
+  if (!phone) return res.status(400).json({ error: "phone é obrigatório (DDI + DDD + número, somente dígitos)" });
+  const client = getClient(req.params.id);
+  if (!client) return res.status(409).json({ error: "instância não está em execução — reinicie a instância" });
+  if (typeof client.requestPairingCode !== "function") {
+    return res.status(500).json({ error: "pareamento por código indisponível" });
+  }
+  try {
+    const code = await client.requestPairingCode(phone);
+    res.json({ code });
+  } catch (err) {
+    console.error(`[instances:pairing-code] ${req.params.id} failed:`, err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+instancesRouter.get("/:id/pairing-code", async (req, res) => {
+  const client = getClient(req.params.id);
+  const code = client?.getPairingCode?.() || null;
+  if (!code) return res.status(404).json({ error: "código indisponível" });
+  res.json({ code });
+});
+
 instancesRouter.post("/:id/restart", async (req, res) => {
   const inst = await getInstance(req.params.id);
   if (!inst) return res.status(404).json({ error: "instância não encontrada" });

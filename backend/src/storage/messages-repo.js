@@ -59,13 +59,19 @@ export async function bulkSaveMessages(instanceId, chatId, messages) {
 
 export async function updateMessageAck(instanceId, chatId, messageId, ack) {
   const file = chatFilePath(instanceId, chatId);
+  let updated = false;
   await updateJson(file, [], current => {
     const idx = current.findIndex(m => m.id === messageId);
     if (idx === -1) return current;
     const next = current.slice();
-    next[idx] = { ...next[idx], ack };
+    const currentAck = Number(next[idx].ack) || 0;
+    const nextAck = Math.max(currentAck, Number(ack) || 0);
+    if (nextAck === currentAck) return current;
+    next[idx] = { ...next[idx], ack: nextAck };
+    updated = true;
     return next;
   });
+  return updated;
 }
 
 export async function updateMessageMedia(instanceId, chatId, messageId, { mediaUrl, mediaMime }) {
