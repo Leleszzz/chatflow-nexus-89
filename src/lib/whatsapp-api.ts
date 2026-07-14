@@ -76,6 +76,17 @@ export type LeadImportResult = LeadListStats & {
   ignorados: number;
 };
 
+// Mensagem pré-configurada. O corpo pode conter {{variaveis}} (ver message-template.ts).
+export type QuickReply = {
+  id: string;
+  titulo: string;
+  corpo: string;
+  ordem: number;
+  criadoPor?: string;
+  criadoEm: string;
+  atualizadoEm: string;
+};
+
 export type ProntuarioCategory = "foto" | "video" | "audio" | "documento" | "outro";
 
 export type ProntuarioAttachment = {
@@ -298,6 +309,17 @@ export const whatsappApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  listQuickReplies: () => request<QuickReply[]>("/api/quick-replies"),
+  createQuickReply: (payload: { titulo: string; corpo: string }) =>
+    request<QuickReply>("/api/quick-replies", { method: "POST", body: JSON.stringify(payload) }),
+  updateQuickReply: (id: string, patch: { titulo?: string; corpo?: string }) =>
+    request<QuickReply>(`/api/quick-replies/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  deleteQuickReply: (id: string) =>
+    request<{ ok: true }>(`/api/quick-replies/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
   leadListStats: () => request<LeadListStats>("/api/leads/stats"),
   lookupLead: (phone: string) =>
     request<LeadListEntry | null>(`/api/leads/lookup?phone=${encodeURIComponent(phone)}`),

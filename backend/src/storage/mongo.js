@@ -48,6 +48,7 @@ export const collections = {
   deals: "deals",
   stages: "stages",
   leadList: "lead_list",
+  quickReplies: "quick_replies",
 };
 
 async function ensureIndexes() {

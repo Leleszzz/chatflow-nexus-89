@@ -14,13 +14,14 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ClientTemperatureBadge, ConversationStatus, StatusBadge, TagBadge } from "@/components/shared/Badges";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, ClipboardList, Clock, Contact as ContactIcon, Copy, FileText, Film, FolderOpen, Image as ImageIcon, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
+import { Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, ClipboardList, Clock, Contact as ContactIcon, Copy, FileText, Film, FolderOpen, Image as ImageIcon, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, MessageSquareText, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
 import { useWhatsAppConversations, useWhatsAppMessages } from "@/hooks/useWhatsAppConversations";
-import { whatsappApi, LeadListEntry, ScheduledMessage, WAConversation, WAMessage, WhatsAppInstance } from "@/lib/whatsapp-api";
+import { whatsappApi, LeadListEntry, QuickReply, ScheduledMessage, WAConversation, WAMessage, WhatsAppInstance } from "@/lib/whatsapp-api";
+import { renderTemplate } from "@/lib/message-template";
 import { Label } from "@/components/ui/label";
 import { AudioMessage } from "@/components/chat/AudioMessage";
 import { ImageViewer } from "@/components/chat/ImageViewer";
@@ -267,6 +268,17 @@ export default function Conversas() {
   const selectedStatus = selected ? conversationStatus(selected) : null;
 
   const { messages: waMessages } = useWhatsAppMessages(isWaConversation ? selected?.id : null);
+
+  // Mensagens pré-configuradas (Configurações > Mensagens rápidas).
+  const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
+  const [quickOpen, setQuickOpen] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    whatsappApi.listQuickReplies()
+      .then(list => { if (!cancelled) setQuickReplies(list); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // Observações da lista de leads importada (Configurações > Lista de leads).
   // Casa pelo telefone; se a conversa ainda não tem número (chat @lid), usa o
@@ -555,6 +567,29 @@ export default function Conversas() {
     setNewConversationPhone("");
     setNewConversationName("");
     setNewConversationOpen(true);
+  };
+
+  // Insere a mensagem pré-configurada no compositor com as variáveis já
+  // resolvidas. Não envia direto: dá para revisar/editar antes.
+  const applyQuickReply = (qr: QuickReply) => {
+    if (!selected) return;
+    const texto = renderTemplate(qr.corpo, {
+      nome: selected.customer,
+      nomeWhatsapp: selected.whatsappName,
+      telefone: selected.phone,
+      listaNome: leadInfo?.nome,
+      listaCpf: leadInfo?.documento,
+      listaTelefone: leadInfo?.telefone,
+      atendente: currentUser?.name,
+    });
+    setDraftMessage(cur => (cur.trim() ? `${cur.trimEnd()}\n${texto}` : texto));
+    setQuickOpen(false);
+    requestAnimationFrame(() => {
+      const ta = messageInputRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    });
   };
 
   const sendText = async () => {
@@ -1260,6 +1295,44 @@ export default function Conversas() {
                           <button onClick={() => openAttachPicker("document")} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-secondary">
                             <FileText className="h-4 w-4 text-primary" /> Documento
                           </button>
+                        </PopoverContent>
+                      </Popover>
+                      <Popover open={quickOpen} onOpenChange={setQuickOpen}>
+                        <PopoverTrigger asChild>
+                          <Button variant="ghost" size="icon" title="Mensagens rápidas" disabled={sending}>
+                            <MessageSquareText className="h-4 w-4" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent align="start" side="top" className="w-80 p-1">
+                          {quickReplies.length === 0 ? (
+                            <div className="p-3 text-center text-xs text-muted-foreground">
+                              Nenhuma mensagem criada.<br />
+                              Crie em Configurações &gt; Mensagens rápidas.
+                            </div>
+                          ) : (
+                            <div className="max-h-72 overflow-y-auto">
+                              {quickReplies.map(qr => (
+                                <button
+                                  key={qr.id}
+                                  onClick={() => applyQuickReply(qr)}
+                                  className="flex w-full flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left hover:bg-secondary"
+                                >
+                                  <span className="text-sm font-medium">{qr.titulo}</span>
+                                  <span className="line-clamp-2 text-xs text-muted-foreground">
+                                    {renderTemplate(qr.corpo, {
+                                      nome: selected.customer,
+                                      nomeWhatsapp: selected.whatsappName,
+                                      telefone: selected.phone,
+                                      listaNome: leadInfo?.nome,
+                                      listaCpf: leadInfo?.documento,
+                                      listaTelefone: leadInfo?.telefone,
+                                      atendente: currentUser?.name,
+                                    })}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </PopoverContent>
                       </Popover>
                       <Button variant="ghost" size="icon" title="Gravar áudio" onClick={startRecording} disabled={sending}>

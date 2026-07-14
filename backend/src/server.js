@@ -18,6 +18,7 @@ import { metricsRouter } from "./routes/metrics.js";
 import { dealsRouter } from "./routes/deals.js";
 import { stagesRouter } from "./routes/stages.js";
 import { leadsRouter } from "./routes/leads.js";
+import { quickRepliesRouter } from "./routes/quick-replies.js";
 import { bindSocketHandlers } from "./socket/events.js";
 import { restoreAllInstances, setIO, shutdownAll } from "./whatsapp/instance-manager.js";
 import { startScheduledSender } from "./whatsapp/scheduled-sender.js";
@@ -54,6 +55,7 @@ async function main() {
   app.use("/api/deals", dealsRouter);
   app.use("/api/stages", stagesRouter);
   app.use("/api/leads", leadsRouter);
+  app.use("/api/quick-replies", quickRepliesRouter);
 
   const httpServer = http.createServer(app);
   const io = new SocketServer(httpServer, {

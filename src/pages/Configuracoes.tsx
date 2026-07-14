@@ -18,8 +18,9 @@ import {
   DayOfWeek,
   LeadDistributionStrategy,
 } from "@/store/crm-store";
-import { whatsappApi, LeadListStats } from "@/lib/whatsapp-api";
-import { Plus, Trash2, Pencil, KeyRound, Loader2, Upload, FileText } from "lucide-react";
+import { whatsappApi, LeadListStats, QuickReply } from "@/lib/whatsapp-api";
+import { TEMPLATE_VARIABLES, renderTemplate, variaveisDesconhecidas } from "@/lib/message-template";
+import { Plus, Trash2, Pencil, KeyRound, Loader2, Upload, FileText, MessageSquareText } from "lucide-react";
 import { toast } from "sonner";
 
 const ROLES = ["Administrador", "Vendedora", "Financeiro", "Somente leitura"];
@@ -92,6 +93,12 @@ export default function Configuracoes() {
   const [leadImporting, setLeadImporting] = useState(false);
   const leadFileRef = useRef<HTMLInputElement>(null);
 
+  const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
+  const [qrDialogOpen, setQrDialogOpen] = useState(false);
+  const [qrEditing, setQrEditing] = useState<{ id: string | null; titulo: string; corpo: string }>({ id: null, titulo: "", corpo: "" });
+  const [qrSaving, setQrSaving] = useState(false);
+  const qrBodyRef = useRef<HTMLTextAreaElement>(null);
+
   useEffect(() => {
     let cancelled = false;
     whatsappApi.getOpenaiStatus()
@@ -100,6 +107,9 @@ export default function Configuracoes() {
       .finally(() => { if (!cancelled) setOpenaiLoading(false); });
     whatsappApi.leadListStats()
       .then(stats => { if (!cancelled) setLeadStats(stats); })
+      .catch(() => {});
+    whatsappApi.listQuickReplies()
+      .then(list => { if (!cancelled) setQuickReplies(list); })
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
@@ -291,6 +301,76 @@ export default function Configuracoes() {
     }
   };
 
+  const openNewQuickReply = () => {
+    setQrEditing({ id: null, titulo: "", corpo: "" });
+    setQrDialogOpen(true);
+  };
+
+  const openEditQuickReply = (qr: QuickReply) => {
+    setQrEditing({ id: qr.id, titulo: qr.titulo, corpo: qr.corpo });
+    setQrDialogOpen(true);
+  };
+
+  // Insere a variável onde o cursor está (não no fim do texto).
+  const insertVariable = (chave: string) => {
+    const ta = qrBodyRef.current;
+    const token = `{{${chave}}}`;
+    if (!ta) {
+      setQrEditing(cur => ({ ...cur, corpo: cur.corpo + token }));
+      return;
+    }
+    const { selectionStart, selectionEnd, value } = ta;
+    const novo = value.slice(0, selectionStart) + token + value.slice(selectionEnd);
+    setQrEditing(cur => ({ ...cur, corpo: novo }));
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = selectionStart + token.length;
+      ta.setSelectionRange(pos, pos);
+    });
+  };
+
+  const handleSaveQuickReply = async () => {
+    const titulo = qrEditing.titulo.trim();
+    const corpo = qrEditing.corpo.trim();
+    if (!titulo || !corpo) {
+      toast.error("Informe o título e a mensagem");
+      return;
+    }
+    const desconhecidas = variaveisDesconhecidas(corpo);
+    if (desconhecidas.length) {
+      toast.error(`Variável inexistente: ${desconhecidas.map(v => `{{${v}}}`).join(", ")}`);
+      return;
+    }
+    setQrSaving(true);
+    try {
+      if (qrEditing.id) {
+        const updated = await whatsappApi.updateQuickReply(qrEditing.id, { titulo, corpo });
+        setQuickReplies(cur => cur.map(q => (q.id === updated.id ? updated : q)));
+        toast.success("Mensagem atualizada");
+      } else {
+        const created = await whatsappApi.createQuickReply({ titulo, corpo });
+        setQuickReplies(cur => [...cur, created]);
+        toast.success("Mensagem criada");
+      }
+      setQrDialogOpen(false);
+    } catch (err) {
+      toast.error((err as Error).message || "Falha ao salvar");
+    } finally {
+      setQrSaving(false);
+    }
+  };
+
+  const handleDeleteQuickReply = async (qr: QuickReply) => {
+    if (!window.confirm(`Apagar a mensagem "${qr.titulo}"?`)) return;
+    try {
+      await whatsappApi.deleteQuickReply(qr.id);
+      setQuickReplies(cur => cur.filter(q => q.id !== qr.id));
+      toast.success("Mensagem removida");
+    } catch (err) {
+      toast.error((err as Error).message || "Falha ao remover");
+    }
+  };
+
   const handleImportLeads = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = ""; // permite reimportar o mesmo arquivo
@@ -339,6 +419,7 @@ export default function Configuracoes() {
           <TabsTrigger value="automation">Distribuição & Agente</TabsTrigger>
           <TabsTrigger value="openai">OpenAI</TabsTrigger>
           <TabsTrigger value="leads">Lista de leads</TabsTrigger>
+          <TabsTrigger value="mensagens">Mensagens rápidas</TabsTrigger>
         </TabsList>
 
         <TabsContent value="account" className="card-elevated p-6 mt-4 max-w-2xl">
@@ -701,7 +782,132 @@ ANDRESSA PEREIRA SCHNEIDER|5845229758|27999060983`}
             Importar de novo <strong>soma</strong> à lista: números novos são adicionados e os já existentes são atualizados. Nada é apagado.
           </p>
         </TabsContent>
+
+        <TabsContent value="mensagens" className="card-elevated p-6 mt-4 space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="font-display font-bold">Mensagens rápidas</h3>
+              <p className="text-sm text-muted-foreground">
+                Ficam disponíveis no chat, no botão <MessageSquareText className="inline h-3.5 w-3.5" /> ao lado do campo de digitação.
+                As variáveis são trocadas pelos dados do lead na hora de inserir.
+              </p>
+            </div>
+            <Button onClick={openNewQuickReply} className="bg-gradient-primary gap-2">
+              <Plus className="h-4 w-4" /> Nova mensagem
+            </Button>
+          </div>
+
+          {quickReplies.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+              Nenhuma mensagem criada ainda.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {quickReplies.map(qr => (
+                <div key={qr.id} className="flex items-start gap-3 rounded-xl border border-border/60 bg-secondary/30 p-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold">{qr.titulo}</div>
+                    <div className="mt-0.5 whitespace-pre-wrap break-words text-xs text-muted-foreground">{qr.corpo}</div>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <Button variant="ghost" size="icon" onClick={() => openEditQuickReply(qr)} title="Editar">
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" onClick={() => handleDeleteQuickReply(qr)} title="Apagar" className="text-destructive hover:text-destructive">
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </TabsContent>
       </Tabs>
+
+      <Dialog open={qrDialogOpen} onOpenChange={setQrDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display">
+              {qrEditing.id ? "Editar mensagem rápida" : "Nova mensagem rápida"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="qr-titulo">Título (só você vê, serve para achar no chat)</Label>
+              <Input
+                id="qr-titulo"
+                value={qrEditing.titulo}
+                onChange={e => setQrEditing(cur => ({ ...cur, titulo: e.target.value }))}
+                placeholder="Ex.: Primeira abordagem"
+                autoFocus
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="qr-corpo">Mensagem</Label>
+              <textarea
+                id="qr-corpo"
+                ref={qrBodyRef}
+                value={qrEditing.corpo}
+                onChange={e => setQrEditing(cur => ({ ...cur, corpo: e.target.value }))}
+                rows={5}
+                placeholder="Ex.: {{saudacao}}, {{primeiro_nome}}! Aqui é {{atendente}}."
+                className="mt-1 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </div>
+
+            <div>
+              <div className="mb-1.5 text-xs font-semibold uppercase text-muted-foreground">
+                Variáveis — clique para inserir no cursor
+              </div>
+              {(["WhatsApp", "Lista importada", "Outros"] as const).map(grupo => (
+                <div key={grupo} className="mb-2">
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">{grupo}</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {TEMPLATE_VARIABLES.filter(v => v.grupo === grupo).map(v => (
+                      <button
+                        key={v.chave}
+                        type="button"
+                        onClick={() => insertVariable(v.chave)}
+                        title={v.descricao}
+                        className="rounded-full border border-border bg-secondary/60 px-2.5 py-1 font-mono text-[11px] transition hover:border-primary hover:bg-primary-soft"
+                      >
+                        {`{{${v.chave}}}`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground">
+                Variável sem valor (ex.: o lead não está na lista importada) vira texto vazio — nunca é enviada crua ao cliente.
+              </p>
+            </div>
+
+            <div>
+              <div className="mb-1.5 text-xs font-semibold uppercase text-muted-foreground">Prévia (com dados de exemplo)</div>
+              <div className="whitespace-pre-wrap rounded-xl bg-primary px-4 py-2 text-sm text-primary-foreground">
+                {renderTemplate(qrEditing.corpo, {
+                  nome: "Maria Silva Santos",
+                  nomeWhatsapp: "Maria 🌻",
+                  telefone: "+55 27 99723-0505",
+                  listaNome: "MARIA SILVA SANTOS",
+                  listaCpf: "34615783809",
+                  listaTelefone: "27997230505",
+                  atendente: accountProfile.name,
+                }) || <span className="opacity-60">A mensagem aparece aqui…</span>}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setQrDialogOpen(false)} disabled={qrSaving}>Cancelar</Button>
+            <Button onClick={handleSaveQuickReply} disabled={qrSaving} className="bg-gradient-primary gap-2">
+              {qrSaving && <Loader2 className="h-4 w-4 animate-spin" />} Salvar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={userDialogOpen} onOpenChange={setUserDialogOpen}>
         <DialogContent className="max-w-lg">
