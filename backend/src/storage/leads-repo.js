@@ -18,47 +18,59 @@ export function phoneKey(raw) {
   return d.slice(0, 2) + d.slice(2).slice(-8);
 }
 
-// Lê o TXT no layout NM_PSSA|NU_DOCUMENTO|NU_FONE_TERMINAL (pipe, com cabeçalho).
-// Tolera linhas em branco, espaços sobrando, CRLF e colunas fora de ordem — a
-// posição das colunas é lida do próprio cabeçalho quando ele existe.
+// Layout esperado: NM_PSSA|NU_DOCUMENTO|NU_FONE_TERMINAL (pipe, com cabeçalho).
+const COLUNAS_PADRAO = { idxNome: 0, idxDoc: 1, idxFone: 2 };
+
+// Detecta o cabeçalho e a posição das colunas nele. Devolve null quando a linha
+// não é cabeçalho (aí valem as posições padrão).
+export function parseLeadsHeader(linha) {
+  const texto = String(linha || "").replace(/^﻿/, "").toUpperCase();
+  if (!texto.includes("NU_FONE") && !texto.includes("NM_PSSA")) return null;
+  const cols = texto.split("|").map(c => c.trim());
+  const acha = (...nomes) => cols.findIndex(c => nomes.some(n => c.includes(n)));
+  const n = acha("NM_PSSA", "NOME");
+  const d = acha("NU_DOCUMENTO", "DOCUMENTO", "CPF");
+  const f = acha("NU_FONE", "FONE", "TELEFONE");
+  return {
+    idxNome: n >= 0 ? n : COLUNAS_PADRAO.idxNome,
+    idxDoc: d >= 0 ? d : COLUNAS_PADRAO.idxDoc,
+    idxFone: f >= 0 ? f : COLUNAS_PADRAO.idxFone,
+  };
+}
+
+// Uma linha de dados -> registro, ou null se não houver telefone válido.
+export function parseLeadLine(linha, colunas = COLUNAS_PADRAO) {
+  if (!linha || !linha.trim()) return null;
+  const campos = String(linha).replace(/^﻿/, "").split("|").map(c => c.trim());
+  const telefone = campos[colunas.idxFone] || "";
+  const key = phoneKey(telefone);
+  if (!key) return null;
+  return {
+    _id: key,
+    phoneKey: key,
+    nome: campos[colunas.idxNome] || "",
+    documento: (campos[colunas.idxDoc] || "").replace(/\D/g, ""),
+    telefone: telefone.replace(/\D/g, ""),
+  };
+}
+
+// Versão em memória — usada nos testes e para arquivos pequenos. Arquivos
+// grandes são importados em streaming pela rota (não cabem em uma string).
 export function parseLeadsTxt(text) {
-  const linhas = String(text || "").replace(/^﻿/, "").split(/\r?\n/);
+  const linhas = String(text || "").split(/\r?\n/);
   const registros = [];
   const invalidas = [];
 
-  let idxNome = 0, idxDoc = 1, idxFone = 2;
-  let comecoDados = 0;
-
-  const cabecalho = (linhas[0] || "").toUpperCase();
-  if (cabecalho.includes("NU_FONE") || cabecalho.includes("NM_PSSA")) {
-    const cols = cabecalho.split("|").map(c => c.trim());
-    const acha = (...nomes) => cols.findIndex(c => nomes.some(n => c.includes(n)));
-    const n = acha("NM_PSSA", "NOME");
-    const d = acha("NU_DOCUMENTO", "DOCUMENTO", "CPF");
-    const f = acha("NU_FONE", "FONE", "TELEFONE");
-    if (n >= 0) idxNome = n;
-    if (d >= 0) idxDoc = d;
-    if (f >= 0) idxFone = f;
-    comecoDados = 1;
-  }
+  const doCabecalho = parseLeadsHeader(linhas[0]);
+  const colunas = doCabecalho || COLUNAS_PADRAO;
+  const comecoDados = doCabecalho ? 1 : 0;
 
   for (let i = comecoDados; i < linhas.length; i++) {
     const linha = linhas[i];
     if (!linha || !linha.trim()) continue;
-    const campos = linha.split("|").map(c => c.trim());
-    const telefone = campos[idxFone] || "";
-    const key = phoneKey(telefone);
-    if (!key) {
-      invalidas.push({ linha: i + 1, conteudo: linha.slice(0, 60) });
-      continue;
-    }
-    registros.push({
-      _id: key,
-      phoneKey: key,
-      nome: campos[idxNome] || "",
-      documento: (campos[idxDoc] || "").replace(/\D/g, ""),
-      telefone: telefone.replace(/\D/g, ""),
-    });
+    const registro = parseLeadLine(linha, colunas);
+    if (registro) registros.push(registro);
+    else invalidas.push({ linha: i + 1, conteudo: linha.slice(0, 60) });
   }
   return { registros, invalidas };
 }
@@ -68,7 +80,11 @@ export function parseLeadsTxt(text) {
 export async function upsertLeads(registros, { importadoPor = "" } = {}) {
   if (!registros?.length) return { inseridos: 0, atualizados: 0 };
   const agora = new Date().toISOString();
-  const ops = registros.map(r => ({
+  // Duas linhas do mesmo número no lote gerariam duplicidade de _id no
+  // bulkWrite (E11000). Fica a última ocorrência.
+  const porChave = new Map();
+  for (const r of registros) porChave.set(r._id, r);
+  const ops = [...porChave.values()].map(r => ({
     updateOne: {
       filter: { _id: r._id },
       update: { $set: { ...r, importadoEm: agora, importadoPor } },

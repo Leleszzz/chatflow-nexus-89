@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { phoneKey, parseLeadsTxt } from "../src/storage/leads-repo.js";
+import { phoneKey, parseLeadsTxt, parseLeadsHeader, parseLeadLine } from "../src/storage/leads-repo.js";
 
 test("phoneKey: arquivo (sem DDI) casa com o JID (com DDI)", () => {
   const doArquivo = phoneKey("27997230505");            // como vem no TXT
@@ -67,6 +67,27 @@ test("parseLeadsTxt: linha sem telefone válido é ignorada, não derruba o impo
   const { registros, invalidas } = parseLeadsTxt(comLixo);
   assert.equal(registros.length, 2);
   assert.equal(invalidas.length, 1);
+});
+
+// A importação real é em streaming (arquivos grandes não cabem em memória):
+// a rota lê linha a linha usando estes dois helpers.
+test("parseLeadsHeader: reconhece o cabeçalho e as posições das colunas", () => {
+  assert.deepEqual(parseLeadsHeader("NM_PSSA|NU_DOCUMENTO|NU_FONE_TERMINAL"), { idxNome: 0, idxDoc: 1, idxFone: 2 });
+  assert.deepEqual(parseLeadsHeader("NU_FONE_TERMINAL|NM_PSSA|NU_DOCUMENTO"), { idxNome: 1, idxDoc: 2, idxFone: 0 });
+  assert.deepEqual(parseLeadsHeader("﻿NM_PSSA|NU_DOCUMENTO|NU_FONE_TERMINAL"), { idxNome: 0, idxDoc: 1, idxFone: 2 });
+  // Linha de dados não é cabeçalho.
+  assert.equal(parseLeadsHeader("VALDINETE SANTOS|34615783809|27997230505"), null);
+});
+
+test("parseLeadLine: uma linha por vez, como no streaming", () => {
+  const cols = parseLeadsHeader("NM_PSSA|NU_DOCUMENTO|NU_FONE_TERMINAL");
+  const r = parseLeadLine("VALDINETE SANTOS|34615783809|27997230505", cols);
+  assert.equal(r.nome, "VALDINETE SANTOS");
+  assert.equal(r.phoneKey, phoneKey("5527997230505"));
+  // Sem telefone válido -> null (a rota conta como ignorada e segue).
+  assert.equal(parseLeadLine("LIXO|sem telefone", cols), null);
+  assert.equal(parseLeadLine("", cols), null);
+  assert.equal(parseLeadLine("   ", cols), null);
 });
 
 test("parseLeadsTxt: duas linhas do mesmo número viram a mesma chave (dedup no upsert)", () => {
