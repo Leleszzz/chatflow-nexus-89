@@ -132,6 +132,7 @@ const conversationStatus = (conversation: Conversation): ConversationStatus => {
 
 const statusFilters = [
   { id: "sem-resposta", label: "Sem resposta" },
+  { id: "cliente-por-ultimo", label: "Cliente falou por último" },
   { id: "minhas", label: "Minhas conversas" },
   { id: "aguardando-cliente", label: "Aguardando cliente" },
   { id: "finalizadas", label: "Finalizadas" },
@@ -257,6 +258,10 @@ export default function Conversas() {
       if (statusFilter === "todas") return true;
       if (statusFilter === "minhas") return [conversation.sellerId, ...(conversation.assignedSellerIds || [])].includes(currentUser?.id || "");
       if (statusFilter === "finalizadas") return status === "finalizada";
+      // Última mensagem veio do cliente (a bola está com você). Compara com
+      // `false` explicitamente: conversa sem nenhuma mensagem tem o campo
+      // indefinido e não deve entrar aqui.
+      if (statusFilter === "cliente-por-ultimo") return conversation.lastMessageFromMe === false;
       return status === statusFilter;
     });
   const selected = conversations.find(conversation => conversation.id === selectedId) || visibleConversations[0];
