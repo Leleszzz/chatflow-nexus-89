@@ -1,4 +1,3 @@
-import { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, CheckCircle2, Clock3, Flame, PauseCircle, Snowflake, Thermometer, X } from "lucide-react";
 import { Temperature } from "@/lib/mock-data";
@@ -46,20 +45,6 @@ export function StatusBadge({ status }: { status: ConversationStatus }) {
   return (
     <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold", cfg.cls)}>
       <Icon className="h-3 w-3" /> {cfg.label}
-    </span>
-  );
-}
-
-export function PriorityAlert({ children, tone = "warning" }: { children: ReactNode; tone?: "warning" | "danger" | "success" }) {
-  const toneClass = {
-    warning: "bg-warning-soft text-warning",
-    danger: "bg-destructive-soft text-destructive",
-    success: "bg-success-soft text-success",
-  }[tone];
-
-  return (
-    <span className={cn("inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold", toneClass)}>
-      <AlertTriangle className="h-3 w-3" /> {children}
     </span>
   );
 }

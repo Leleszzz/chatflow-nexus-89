@@ -1,20 +1,46 @@
 import { Router } from "express";
 import { nanoid } from "nanoid";
 import { listInstances, getInstance, upsertInstance, patchInstance } from "../storage/instances-repo.js";
-import { startInstance, stopInstance, deleteInstance, getClient } from "../whatsapp/instance-manager.js";
+import { startInstance, stopInstance, deleteInstance, getClient, connectionManager } from "../whatsapp/instance-manager.js";
 import { removeMessagesByInstance } from "../storage/messages-repo.js";
-import { removeConversationsByInstance } from "../storage/conversations-repo.js";
+import { removeConversationsByInstance, countConversations } from "../storage/conversations-repo.js";
+import { requireAuth } from "../middleware/require-auth.js";
 
 export const instancesRouter = Router();
 
+// Todas as rotas de instância exigem usuário autenticado.
+instancesRouter.use(requireAuth());
+
+// Estado de conexão + métricas em tempo real da instância.
+instancesRouter.get("/:id/status", async (req, res) => {
+  const inst = await getInstance(req.params.id);
+  if (!inst) return res.status(404).json({ error: "instância não encontrada" });
+  const snap = connectionManager.statusSnapshot()[req.params.id] || { state: "offline" };
+  res.json({ instanceId: req.params.id, dbStatus: inst.status, ...snap });
+});
+
 instancesRouter.get("/", async (_req, res) => {
   const all = await listInstances();
-  res.json(all);
+  // Conta as conversas reais por instância (sempre preciso, sem contador frágil).
+  const enriched = await Promise.all(
+    all.map(async inst => ({ ...inst, conversations: await countConversations(inst.id) })),
+  );
+  res.json(enriched);
 });
+
+// Modos de importação de histórico na primeira conexão:
+//   none   → só mensagens novas a partir do pareamento
+//   recent → histórico recente que o telefone envia no pareamento (padrão)
+//   full   → histórico completo (sync mais demorado)
+const HISTORY_SYNC_MODES = new Set(["none", "recent", "full"]);
 
 instancesRouter.post("/", async (req, res) => {
   const name = String(req.body?.name || "").trim();
   if (!name) return res.status(400).json({ error: "name é obrigatório" });
+  const historySync = String(req.body?.historySync || "recent").trim();
+  if (!HISTORY_SYNC_MODES.has(historySync)) {
+    return res.status(400).json({ error: `historySync inválido: use ${[...HISTORY_SYNC_MODES].join(", ")}` });
+  }
 
   const id = `wa-${nanoid(8)}`;
   const instance = {
@@ -25,6 +51,7 @@ instancesRouter.post("/", async (req, res) => {
     lastSync: "",
     conversations: 0,
     historySynced: false,
+    historySync,
     createdAt: new Date().toISOString(),
   };
   await upsertInstance(instance);
@@ -91,10 +118,10 @@ instancesRouter.get("/:id/pairing-code", async (req, res) => {
 instancesRouter.post("/:id/restart", async (req, res) => {
   const inst = await getInstance(req.params.id);
   if (!inst) return res.status(404).json({ error: "instância não encontrada" });
-  await stopInstance(req.params.id);
-  await patchInstance(req.params.id, { status: "conectando" });
-  await startInstance(req.params.id);
-  res.json({ ok: true });
+  await connectionManager.restart(req.params.id);
+  // O catch-up de verificação/backfill roda automaticamente ~4s após o open
+  // (ConnectionManager, handler conn.on("open")), emitindo "instance:sync-recent-done".
+  res.json({ ok: true, willSync: true });
 });
 
 instancesRouter.post("/:id/resync-history", async (req, res) => {

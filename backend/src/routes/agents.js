@@ -2,15 +2,8 @@ import { Router } from "express";
 import { getOpenaiSettings } from "../storage/settings-repo.js";
 import { requireAuth } from "../middleware/require-auth.js";
 import { getClient } from "../whatsapp/instance-manager.js";
-import { listMessages, appendMessage, nextOutgoingTimestamp } from "../storage/messages-repo.js";
-import { upsertConversation, getConversation } from "../storage/conversations-repo.js";
-import {
-  mapChatFromBaileys,
-  ackForSentResult,
-  buildConversationId,
-  previewFor,
-} from "../whatsapp/message-mapper.js";
-import { emitToInstance } from "../socket/events.js";
+import { listMessages } from "../storage/messages-repo.js";
+import { finalizeOutgoingMessage } from "../whatsapp/outgoing.js";
 import { addUsage, getAllUsage, resetUsage } from "../storage/agent-usage-repo.js";
 
 export const agentsRouter = Router();
@@ -298,58 +291,15 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
     return res.status(500).json({ error: `Falha ao enviar mensagem: ${err.message}` });
   }
 
-  const messageId = result?.key?.id || null;
-  const baileysTs = Number(result?.messageTimestamp);
-  const timestamp = await nextOutgoingTimestamp(instanceId, chatId, baileysTs);
-  const initialAck = ackForSentResult(result?.status);
-
-  if (messageId) {
-    const stored = {
-      id: messageId,
-      chatId,
-      instanceId,
-      fromMe: true,
-      author: "",
-      type: "chat",
-      body: reply,
-      timestamp,
-      ack: initialAck,
-    };
-    await appendMessage(instanceId, chatId, stored);
-
-    try {
-      const chatEntry = client.getChatById ? client.getChatById(chatId) : null;
-      const conv = mapChatFromBaileys({
-        jid: chatId,
-        chatEntry,
-        contact: null,
-        instanceId,
-        lastMessage: stored,
-      });
-      const prior = await getConversation(buildConversationId(instanceId, chatId));
-      const merged = {
-        ...conv,
-        customer: prior?.customer || conv.customer,
-        whatsappName: prior?.whatsappName || conv.whatsappName,
-        phone: prior?.phone || conv.phone,
-        avatarUrl: prior?.avatarUrl,
-        lastMessage: previewFor(stored),
-        lastMessageId: stored.id,
-        lastMessageFromMe: true,
-        lastMessageAck: initialAck,
-        lastInteraction: new Date(stored.timestamp * 1000).toISOString(),
-        unreadCount: 0,
-        unread: false,
-      };
-      const persisted = await upsertConversation(merged);
-      emitToInstance(req.app.get("io"), instanceId, "message:new", {
-        conversation: persisted,
-        message: stored,
-      });
-    } catch (err) {
-      console.warn(`[agents:respond] could not enrich conversation: ${err.message}`);
-    }
-  }
+  const { messageId } = await finalizeOutgoingMessage({
+    io: req.app.get("io"),
+    client,
+    instanceId,
+    chatId,
+    result,
+    logLabel: "agents:respond",
+    message: { type: "chat", body: reply },
+  });
 
   res.json({
     ok: true,

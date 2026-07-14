@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { useCRM } from "@/store/crm-store";
+import { useWhatsAppConversations } from "@/hooks/useWhatsAppConversations";
 import { Deal, DealStage } from "@/lib/mock-data";
 import { KanbanColumn } from "@/components/kanban/KanbanColumn";
 import { KanbanCard } from "@/components/kanban/KanbanCard";
@@ -20,7 +21,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function Kanban() {
-  const { deals, moveDeal, stages, removeStage, appointments, canViewDeal, isAdmin, teamUsers, tags } = useCRM();
+  const { deals, moveDeal, stages, removeStage, appointments, canViewDeal, isAdmin, teamUsers, tags, conversationPatches } = useCRM();
+  const { conversations: waConversations } = useWhatsAppConversations();
   const [searchParams, setSearchParams] = useSearchParams();
   const boardRef = useRef<HTMLDivElement>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
@@ -86,6 +88,24 @@ export default function Kanban() {
     visibleDeals.forEach(d => map.get(d.stage)?.push(d));
     return map;
   }, [visibleDeals, stages]);
+
+  // Foto do contato (avatar da conversa do WhatsApp) por deal. O vínculo deal<->conversa
+  // vem do patch (patch.dealId); o telefone é um fallback quando o patch não existe.
+  const avatarByDeal = useMemo(() => {
+    const byDealId = new Map<string, string>();
+    const byPhone = new Map<string, string>();
+    for (const wa of waConversations) {
+      if (!wa.avatarUrl) continue;
+      const dealId = conversationPatches[wa.id]?.dealId;
+      if (dealId) byDealId.set(dealId, wa.avatarUrl);
+      const digits = (wa.phone || "").replace(/\D/g, "");
+      if (digits) byPhone.set(digits, wa.avatarUrl);
+    }
+    return { byDealId, byPhone };
+  }, [waConversations, conversationPatches]);
+
+  const avatarForDeal = (deal: Deal) =>
+    avatarByDeal.byDealId.get(deal.id) || avatarByDeal.byPhone.get((deal.phone || "").replace(/\D/g, "")) || undefined;
 
   const nextAppointmentByDeal = useMemo(() => {
     const now = new Date();
@@ -303,7 +323,7 @@ export default function Kanban() {
               onRemove={() => handleRemoveStage(s.id, s.title, grouped.get(s.id)?.length || 0)}
             >
               {grouped.get(s.id)?.map(d => (
-                <KanbanCard key={d.id} deal={d} nextAppointment={nextAppointmentByDeal.get(d.id)} draggable onClick={() => { setSelected(d); setSheetOpen(true); }} />
+                <KanbanCard key={d.id} deal={d} avatarUrl={avatarForDeal(d)} nextAppointment={nextAppointmentByDeal.get(d.id)} draggable onClick={() => { setSelected(d); setSheetOpen(true); }} />
               ))}
             </KanbanColumn>
           ))}

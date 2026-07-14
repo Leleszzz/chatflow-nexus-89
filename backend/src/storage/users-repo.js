@@ -1,29 +1,31 @@
 import fs from "node:fs/promises";
 import { nanoid } from "nanoid";
 import { config } from "../config.js";
-import { readJson, updateJson, writeJson } from "./json-store.js";
+import { getCol, collections } from "./mongo.js";
 import { hashPassword } from "../lib/password.js";
 
-const FILE = config.paths.usersFile;
+const col = () => getCol(collections.users);
 const SEED_FILE = config.paths.usersSeedFile;
+const PROJ = { projection: { _id: 0 } };
 
 let seedPromise = null;
 
+// Semeia a coleção a partir do arquivo seed apenas se ela estiver vazia
+// (a migração one-time do boot já pode tê-la preenchido a partir de users.json).
 async function ensureSeed() {
   if (seedPromise) return seedPromise;
   seedPromise = (async () => {
-    try {
-      await fs.access(FILE);
-      return;
-    } catch {}
+    const count = await col().countDocuments();
+    if (count > 0) return;
     try {
       const raw = await fs.readFile(SEED_FILE, "utf8");
       const seed = JSON.parse(raw);
-      await writeJson(FILE, Array.isArray(seed) ? seed : []);
-      console.log(`[users-repo] seeded ${FILE} from ${SEED_FILE}`);
+      if (Array.isArray(seed) && seed.length) {
+        await col().insertMany(seed.map(u => ({ _id: u.id, ...u })), { ordered: false });
+        console.log(`[users-repo] seeded users from ${SEED_FILE}`);
+      }
     } catch (err) {
-      console.warn(`[users-repo] seed failed (${err.message}); starting with empty users.json`);
-      await writeJson(FILE, []);
+      console.warn(`[users-repo] seed failed (${err.message}); starting with empty users`);
     }
   })();
   return seedPromise;
@@ -31,24 +33,24 @@ async function ensureSeed() {
 
 function sanitize(user) {
   if (!user) return user;
-  const { passwordHash, passwordSalt, password, ...rest } = user;
+  const { passwordHash, passwordSalt, password, _id, ...rest } = user;
   return rest;
 }
 
 export async function listUsers() {
   await ensureSeed();
-  const users = await readJson(FILE, []);
+  const users = await col().find({}, PROJ).toArray();
   return users.map(sanitize);
 }
 
-export async function listUsersRaw() {
+async function listUsersRaw() {
   await ensureSeed();
-  return readJson(FILE, []);
+  return col().find({}, PROJ).toArray();
 }
 
 export async function getUser(id) {
-  const all = await listUsersRaw();
-  return all.find(u => u.id === id) || null;
+  await ensureSeed();
+  return col().findOne({ _id: id }, PROJ);
 }
 
 export async function getSanitizedUser(id) {
@@ -92,42 +94,33 @@ export async function createUser(input) {
   };
   const withCreds = { ...base, ...(await withPasswordPatch({ password: input.password })) };
 
-  await updateJson(FILE, [], current => {
-    if (current.some(u => u.id === withCreds.id)) {
-      throw new Error(`Já existe usuário com id ${withCreds.id}`);
-    }
-    return [...current, withCreds];
-  });
+  try {
+    await col().insertOne({ _id: id, ...withCreds });
+  } catch (err) {
+    if (err?.code === 11000) throw new Error(`Já existe usuário com id ${id}`);
+    throw err;
+  }
   return sanitize(withCreds);
 }
 
 export async function updateUser(id, patch) {
   await ensureSeed();
   const credsPatch = await withPasswordPatch(patch);
-  let updated;
-  await updateJson(FILE, [], current => {
-    const idx = current.findIndex(u => u.id === id);
-    if (idx === -1) return current;
-    const next = current.slice();
-    next[idx] = { ...next[idx], ...credsPatch };
-    updated = next[idx];
-    return next;
-  });
+  const res = await col().findOneAndUpdate(
+    { _id: id },
+    { $set: credsPatch },
+    { returnDocument: "after", projection: { _id: 0 } },
+  );
+  const updated = res?.value ?? res;
   return updated ? sanitize(updated) : null;
 }
 
 export async function setPassword(id, passwordHash, passwordSalt) {
-  await updateJson(FILE, [], current => {
-    const idx = current.findIndex(u => u.id === id);
-    if (idx === -1) return current;
-    const next = current.slice();
-    next[idx] = { ...next[idx], passwordHash, passwordSalt };
-    return next;
-  });
+  await col().updateOne({ _id: id }, { $set: { passwordHash, passwordSalt } });
 }
 
 export async function deleteUser(id) {
-  await updateJson(FILE, [], current => current.filter(u => u.id !== id));
+  await col().deleteOne({ _id: id });
 }
 
 export { sanitize as sanitizeUser };

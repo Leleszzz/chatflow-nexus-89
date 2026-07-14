@@ -1,7 +1,6 @@
-import { config } from "../config.js";
-import { readJson, updateJson } from "./json-store.js";
+import { getCol, collections } from "./mongo.js";
 
-const FILE = config.paths.agentUsageFile;
+const col = () => getCol(collections.agentUsage);
 
 const emptyEntry = () => ({
   promptTokens: 0,
@@ -12,33 +11,30 @@ const emptyEntry = () => ({
 });
 
 export async function getAllUsage() {
-  return readJson(FILE, {});
+  const docs = await col().find({}).toArray();
+  const out = {};
+  for (const d of docs) {
+    const { _id, ...rest } = d;
+    out[_id] = rest;
+  }
+  return out;
 }
 
 export async function addUsage(agentId, { promptTokens = 0, completionTokens = 0, costUsd = 0 } = {}) {
   if (!agentId) return null;
-  let updated;
-  await updateJson(FILE, {}, current => {
-    const prev = current[agentId] || emptyEntry();
-    const next = {
-      promptTokens: (prev.promptTokens || 0) + (Number(promptTokens) || 0),
-      completionTokens: (prev.completionTokens || 0) + (Number(completionTokens) || 0),
-      costUsd: Number(((prev.costUsd || 0) + (Number(costUsd) || 0)).toFixed(8)),
-      calls: (prev.calls || 0) + 1,
-      lastUpdatedAt: new Date().toISOString(),
-    };
-    updated = next;
-    return { ...current, [agentId]: next };
-  });
-  return updated;
+  const prev = (await col().findOne({ _id: agentId }, { projection: { _id: 0 } })) || emptyEntry();
+  const next = {
+    promptTokens: (prev.promptTokens || 0) + (Number(promptTokens) || 0),
+    completionTokens: (prev.completionTokens || 0) + (Number(completionTokens) || 0),
+    costUsd: Number(((prev.costUsd || 0) + (Number(costUsd) || 0)).toFixed(8)),
+    calls: (prev.calls || 0) + 1,
+    lastUpdatedAt: new Date().toISOString(),
+  };
+  await col().updateOne({ _id: agentId }, { $set: next }, { upsert: true });
+  return next;
 }
 
 export async function resetUsage(agentId) {
   if (!agentId) return;
-  await updateJson(FILE, {}, current => {
-    if (!(agentId in current)) return current;
-    const next = { ...current };
-    delete next[agentId];
-    return next;
-  });
+  await col().deleteOne({ _id: agentId });
 }

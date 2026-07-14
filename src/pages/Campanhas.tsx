@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useCRM } from "@/store/crm-store";
 import { cn } from "@/lib/utils";
+import { downloadCsv } from "@/lib/csv";
 import { BadgeCheck, Download, MessageSquareText, Pause, Play, RotateCcw, Search, Send, Square, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -57,21 +58,6 @@ const daysSince = (value: string) => {
 
 const responseRate = (campaign: CampaignSummary) =>
   campaign.sent ? Math.round((campaign.responses / campaign.sent) * 100) : 0;
-
-const csvEscape = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
-
-const downloadCsv = (filename: string, rows: Array<Array<string | number>>) => {
-  const csv = rows.map(row => row.map(csvEscape).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-};
 
 const buildFallbackReportRows = (campaign: CampaignSummary): CampaignReportRow[] =>
   Array.from({ length: Math.min(campaign.audience, 12) }, (_, index) => ({

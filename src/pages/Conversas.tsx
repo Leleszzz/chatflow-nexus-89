@@ -14,13 +14,13 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ClientTemperatureBadge, ConversationStatus, StatusBadge, TagBadge } from "@/components/shared/Badges";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { Bot, CalendarClock, Check, CheckCheck, Clock, Contact as ContactIcon, FileText, Film, FolderOpen, Image as ImageIcon, Info, KanbanSquare, MessageCirclePlus, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Search, Send, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
+import { Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, Clock, Contact as ContactIcon, Copy, FileText, Film, FolderOpen, Image as ImageIcon, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
 import { useWhatsAppConversations, useWhatsAppMessages } from "@/hooks/useWhatsAppConversations";
-import { whatsappApi, WAConversation, WAMessage, WhatsAppInstance } from "@/lib/whatsapp-api";
+import { whatsappApi, ScheduledMessage, WAConversation, WAMessage, WhatsAppInstance } from "@/lib/whatsapp-api";
 import { Label } from "@/components/ui/label";
 import { AudioMessage } from "@/components/chat/AudioMessage";
 import { ImageViewer } from "@/components/chat/ImageViewer";
@@ -155,6 +155,8 @@ export default function Conversas() {
   const [notesDraft, setNotesDraft] = useState("");
   const [draftMessage, setDraftMessage] = useState("");
   const [sending, setSending] = useState(false);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const [selectionToolbar, setSelectionToolbar] = useState<{ top: number; left: number } | null>(null);
   const attachInputRef = useRef<HTMLInputElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -175,6 +177,15 @@ export default function Conversas() {
   const [prontuarioTarget, setProntuarioTarget] = useState<WAMessage | null>(null);
   const [prontuarioName, setProntuarioName] = useState("");
   const [linkingProntuario, setLinkingProntuario] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduledList, setScheduledList] = useState<ScheduledMessage[]>([]);
+  const [loadingScheduled, setLoadingScheduled] = useState(false);
+  const [savingSchedule, setSavingSchedule] = useState(false);
+  const [schedBody, setSchedBody] = useState("");
+  const [schedDate, setSchedDate] = useState("");
+  const [schedTime, setSchedTime] = useState("");
+  const [schedCancelClient, setSchedCancelClient] = useState(true);
+  const [schedCancelAgent, setSchedCancelAgent] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -537,7 +548,91 @@ export default function Conversas() {
       toast.error(`Falha ao enviar: ${(err as Error).message}`);
     } finally {
       setSending(false);
+      setSelectionToolbar(null);
+      requestAnimationFrame(() => messageInputRef.current?.focus());
     }
+  };
+
+  // Calcula a posição do início da seleção dentro do textarea usando um espelho invisível.
+  const getSelectionCoords = (textarea: HTMLTextAreaElement, position: number) => {
+    const mirror = document.createElement("div");
+    const computed = window.getComputedStyle(textarea);
+    const props = [
+      "boxSizing", "width", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
+      "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "fontStyle", "fontVariant", "fontWeight",
+      "fontStretch", "fontSize", "lineHeight", "fontFamily", "textAlign", "textTransform", "textIndent",
+      "letterSpacing", "wordSpacing", "tabSize",
+    ];
+    mirror.style.position = "absolute";
+    mirror.style.visibility = "hidden";
+    mirror.style.whiteSpace = "pre-wrap";
+    mirror.style.wordWrap = "break-word";
+    mirror.style.overflowWrap = "break-word";
+    props.forEach(p => { (mirror.style as unknown as Record<string, string>)[p] = computed.getPropertyValue(p); });
+    mirror.textContent = textarea.value.substring(0, position);
+    const marker = document.createElement("span");
+    marker.textContent = textarea.value.substring(position) || ".";
+    mirror.appendChild(marker);
+    document.body.appendChild(mirror);
+    const coords = { top: marker.offsetTop, left: marker.offsetLeft, height: parseInt(computed.lineHeight, 10) || 18 };
+    document.body.removeChild(mirror);
+    return coords;
+  };
+
+  const updateSelectionToolbar = () => {
+    const ta = messageInputRef.current;
+    if (!ta) return;
+    const { selectionStart, selectionEnd } = ta;
+    if (selectionStart === selectionEnd) {
+      setSelectionToolbar(null);
+      return;
+    }
+    const coords = getSelectionCoords(ta, selectionStart);
+    setSelectionToolbar({
+      top: coords.top - ta.scrollTop - 8,
+      left: Math.max(coords.left - ta.scrollLeft, 0),
+    });
+  };
+
+  // Envolve a seleção com marcadores de formatação do WhatsApp (* negrito, _ itálico).
+  const wrapSelection = (marker: string) => {
+    const ta = messageInputRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    if (start === end) return;
+    const value = draftMessage;
+    const next = value.slice(0, start) + marker + value.slice(start, end) + marker + value.slice(end);
+    setDraftMessage(next);
+    setSelectionToolbar(null);
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(start + marker.length, end + marker.length);
+    });
+  };
+
+  const copySelection = async () => {
+    const ta = messageInputRef.current;
+    if (!ta) return;
+    const text = draftMessage.slice(ta.selectionStart, ta.selectionEnd);
+    if (text) await navigator.clipboard.writeText(text);
+    setSelectionToolbar(null);
+    requestAnimationFrame(() => ta.focus());
+  };
+
+  const cutSelection = async () => {
+    const ta = messageInputRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const text = draftMessage.slice(start, end);
+    if (text) await navigator.clipboard.writeText(text);
+    setDraftMessage(draftMessage.slice(0, start) + draftMessage.slice(end));
+    setSelectionToolbar(null);
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(start, start);
+    });
   };
 
   const sendSchedulingDays = async (days: string[]) => {
@@ -690,6 +785,90 @@ export default function Conversas() {
     if (r.state !== "inactive") r.stop();
   };
 
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+
+  const loadScheduled = async (conversationId: string) => {
+    setLoadingScheduled(true);
+    try {
+      const list = await whatsappApi.listScheduledMessages({ conversationId });
+      setScheduledList(list);
+    } catch (err) {
+      toast.error(`Falha ao carregar agendamentos: ${(err as Error).message}`);
+    } finally {
+      setLoadingScheduled(false);
+    }
+  };
+
+  const openScheduleDialog = () => {
+    if (!selected) return;
+    if (!isWaConversation) {
+      toast.error("Vincule esta conversa a uma instância de WhatsApp para agendar mensagens.");
+      return;
+    }
+    const base = new Date(Date.now() + 60 * 60 * 1000);
+    setSchedBody("");
+    setSchedDate(`${base.getFullYear()}-${pad2(base.getMonth() + 1)}-${pad2(base.getDate())}`);
+    setSchedTime(`${pad2(base.getHours())}:${pad2(base.getMinutes())}`);
+    setSchedCancelClient(true);
+    setSchedCancelAgent(false);
+    setLeadActionsOpen(false);
+    setScheduleOpen(true);
+    loadScheduled(selected.id);
+  };
+
+  const submitSchedule = async () => {
+    if (!selected || !selected.instanceId || !selected.chatId) return;
+    const body = schedBody.trim();
+    if (!body) { toast.error("Digite a mensagem a ser agendada."); return; }
+    if (!schedDate || !schedTime) { toast.error("Informe a data e a hora do envio."); return; }
+    const when = new Date(`${schedDate}T${schedTime}`);
+    if (Number.isNaN(when.getTime())) { toast.error("Data/hora inválida."); return; }
+    if (when.getTime() < Date.now()) { toast.error("Escolha uma data/hora no futuro."); return; }
+    setSavingSchedule(true);
+    try {
+      const created = await whatsappApi.createScheduledMessage({
+        instanceId: selected.instanceId,
+        chatId: selected.chatId,
+        conversationId: selected.id,
+        body,
+        scheduledAt: when.toISOString(),
+        cancelIfClientReplies: schedCancelClient,
+        cancelIfAgentReplies: schedCancelAgent,
+        createdBy: currentUser?.id,
+      });
+      setScheduledList(prev => [...prev, created].sort((a, b) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime()));
+      setSchedBody("");
+      toast.success("Mensagem agendada com sucesso.");
+    } catch (err) {
+      toast.error(`Não foi possível agendar: ${(err as Error).message}`);
+    } finally {
+      setSavingSchedule(false);
+    }
+  };
+
+  const cancelSchedule = async (item: ScheduledMessage) => {
+    const purge = item.status !== "pending";
+    try {
+      const res = await whatsappApi.cancelScheduledMessage(item.id, { purge });
+      if (purge) {
+        setScheduledList(prev => prev.filter(s => s.id !== item.id));
+        toast.success("Agendamento removido.");
+      } else {
+        setScheduledList(prev => prev.map(s => (s.id === item.id ? (res as ScheduledMessage) : s)));
+        toast.success("Agendamento cancelado.");
+      }
+    } catch (err) {
+      toast.error(`Falha: ${(err as Error).message}`);
+    }
+  };
+
+  // Mantém a lista de agendamentos em dia enquanto o painel está aberto
+  // (reflete cancelamentos automáticos por resposta do cliente/atendente).
+  useEffect(() => {
+    if (scheduleOpen && selected?.id) loadScheduled(selected.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waMessages.length]);
+
   return (
     <AppLayout title="Conversas" subtitle="Atendimento via WhatsApp">
       <div className="card-elevated flex min-h-[calc(100vh-180px)] flex-col overflow-hidden lg:h-[calc(100vh-180px)] lg:flex-row">
@@ -834,9 +1013,21 @@ export default function Conversas() {
                 <Button variant="outline" className="gap-2" onClick={openProntuarioPage} title="Abrir prontuário">
                   <FolderOpen className="h-4 w-4" /> Prontuário
                 </Button>
-                <Button variant="ghost" size="icon" onClick={() => setLeadActionsOpen(true)} title="Opções do lead">
-                  <MoreVertical className="h-4 w-4" />
-                </Button>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="ghost" size="icon" title="Mais opções">
+                      <MoreVertical className="h-4 w-4" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="w-56 p-1">
+                    <button onClick={() => setLeadActionsOpen(true)} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-secondary">
+                      <Settings2 className="h-4 w-4 text-muted-foreground" /> Opções do lead
+                    </button>
+                    <button onClick={openScheduleDialog} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-secondary">
+                      <CalendarClock className="h-4 w-4 text-primary" /> Agendamentos de mensagens
+                    </button>
+                  </PopoverContent>
+                </Popover>
               </div>
 
               <div className="flex-1 space-y-3 overflow-y-auto p-6" ref={messagesContainerRef}>
@@ -850,7 +1041,10 @@ export default function Conversas() {
                       <div key={message.id} className={cn("flex", message.fromMe ? "justify-end" : "justify-start")}>
                         <div className={cn("max-w-[70%] rounded-2xl px-4 py-2 text-sm shadow-sm",
                           message.fromMe ? "rounded-br-sm bg-primary text-primary-foreground" : "rounded-bl-sm bg-card")}>
-                          {message.type === "contact" && (message.contacts || (message.contact ? [message.contact] : [])).map((contact, index) => (
+                          {message.deleted && (
+                            <div className="text-xs italic opacity-70">🚫 Mensagem apagada</div>
+                          )}
+                          {!message.deleted && message.type === "contact" && (message.contacts || (message.contact ? [message.contact] : [])).map((contact, index) => (
                             <div key={`${message.id}-contact-${index}`} className={cn(
                               "mb-1 w-64 max-w-full rounded-lg border p-3",
                               message.fromMe ? "border-primary-foreground/25 bg-primary-foreground/10" : "border-border bg-secondary/60",
@@ -884,7 +1078,7 @@ export default function Conversas() {
                               </Button>
                             </div>
                           ))}
-                          {message.mediaUrl && (message.type === "image" || message.type === "sticker") && (
+                          {!message.deleted && message.mediaUrl && (message.type === "image" || message.type === "sticker") && (
                             <button
                               type="button"
                               onClick={() => setViewer({ src: message.mediaUrl!, kind: "image" })}
@@ -894,10 +1088,10 @@ export default function Conversas() {
                               <img src={message.mediaUrl} alt="" className={cn("rounded-lg", message.type === "sticker" ? "max-h-40" : "max-h-72")} />
                             </button>
                           )}
-                          {message.mediaUrl && (message.type === "audio" || message.type === "ptt") && (
+                          {!message.deleted && message.mediaUrl && (message.type === "audio" || message.type === "ptt") && (
                             <div className="mb-1"><AudioMessage src={message.mediaUrl} mine={message.fromMe} /></div>
                           )}
-                          {message.mediaUrl && message.type === "video" && (
+                          {!message.deleted && message.mediaUrl && message.type === "video" && (
                             message.isGif ? (
                               <video src={message.mediaUrl} className="mb-1 max-h-72 rounded-lg" autoPlay loop muted playsInline />
                             ) : (
@@ -916,11 +1110,11 @@ export default function Conversas() {
                               </button>
                             )
                           )}
-                          {message.mediaUrl && message.type === "document" && (
+                          {!message.deleted && message.mediaUrl && message.type === "document" && (
                             <a href={message.mediaUrl} target="_blank" rel="noreferrer" className="mb-1 block text-xs underline">Abrir documento</a>
                           )}
-                          {message.body && message.type !== "contact" && <div className="whitespace-pre-wrap break-words">{message.body}</div>}
-                          {message.mediaUrl && (
+                          {!message.deleted && message.body && message.type !== "contact" && <div className="whitespace-pre-wrap break-words">{message.body}</div>}
+                          {!message.deleted && message.mediaUrl && (
                             <button
                               type="button"
                               onClick={() => openProntuarioLink(message)}
@@ -936,6 +1130,7 @@ export default function Conversas() {
                             </button>
                           )}
                           <div className={cn("mt-1 flex items-center justify-end gap-1 text-[10px]", message.fromMe ? "text-primary-foreground/70" : "text-muted-foreground")}>
+                            {message.edited && !message.deleted && <span className="italic">(editada)</span>}
                             <span>{formatTime(new Date(message.timestamp * 1000).toISOString())}</span>
                             {message.fromMe && (
                               message.ack >= 3
@@ -1029,14 +1224,41 @@ export default function Conversas() {
                       <Button variant="ghost" size="icon" title="Gravar áudio" onClick={startRecording} disabled={sending}>
                         <Mic className="h-4 w-4" />
                       </Button>
-                      <Input
-                        value={draftMessage}
-                        onChange={e => setDraftMessage(e.target.value)}
-                        onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText(); } }}
-                        placeholder="Digite uma mensagem..."
-                        className="bg-secondary"
-                        disabled={sending}
-                      />
+                      <div className="relative flex-1">
+                        {selectionToolbar && (
+                          <div
+                            className="absolute z-20 flex -translate-x-1/2 -translate-y-full items-center gap-0.5 rounded-md border border-border bg-popover p-0.5 shadow-md"
+                            style={{ top: selectionToolbar.top, left: selectionToolbar.left }}
+                            onMouseDown={e => e.preventDefault()}
+                          >
+                            <button type="button" title="Copiar" onClick={copySelection} className="rounded p-1.5 hover:bg-secondary">
+                              <Copy className="h-4 w-4" />
+                            </button>
+                            <button type="button" title="Recortar" onClick={cutSelection} className="rounded p-1.5 hover:bg-secondary">
+                              <Scissors className="h-4 w-4" />
+                            </button>
+                            <button type="button" title="Negrito" onClick={() => wrapSelection("*")} className="rounded p-1.5 hover:bg-secondary">
+                              <Bold className="h-4 w-4" />
+                            </button>
+                            <button type="button" title="Itálico" onClick={() => wrapSelection("_")} className="rounded p-1.5 hover:bg-secondary">
+                              <Italic className="h-4 w-4" />
+                            </button>
+                          </div>
+                        )}
+                        <Textarea
+                          ref={messageInputRef}
+                          value={draftMessage}
+                          onChange={e => setDraftMessage(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText(); } }}
+                          onSelect={updateSelectionToolbar}
+                          onScroll={updateSelectionToolbar}
+                          onBlur={() => setSelectionToolbar(null)}
+                          placeholder="Digite uma mensagem..."
+                          rows={1}
+                          className="max-h-32 min-h-[40px] resize-none bg-secondary"
+                          disabled={sending}
+                        />
+                      </div>
                       <Button onClick={sendText} disabled={sending || !draftMessage.trim()} className="gap-2">
                         <Send className="h-4 w-4" /> Enviar
                       </Button>
@@ -1340,6 +1562,138 @@ export default function Conversas() {
             <Button onClick={confirmProntuarioLink} disabled={linkingProntuario} className="gap-2">
               <FolderOpen className="h-4 w-4" /> {linkingProntuario ? "Vinculando..." : "Vincular"}
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
+        <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-display">
+              <CalendarClock className="h-5 w-5 text-primary" /> Agendamentos de mensagens
+            </DialogTitle>
+          </DialogHeader>
+          {selected && (
+            <p className="-mt-2 text-xs text-muted-foreground">
+              Para <span className="font-medium text-foreground">{selected.customer}</span>
+              {selected.phone ? ` · ${selected.phone}` : ""}
+            </p>
+          )}
+
+          <div className="rounded-xl border border-border bg-card p-4">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Nova mensagem agendada</div>
+            <Textarea
+              value={schedBody}
+              onChange={e => setSchedBody(e.target.value)}
+              placeholder="Digite a mensagem que será enviada automaticamente..."
+              rows={3}
+              className="resize-none"
+            />
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div>
+                <Label className="mb-1 block text-[11px] font-semibold uppercase text-muted-foreground">Data</Label>
+                <Input type="date" value={schedDate} onChange={e => setSchedDate(e.target.value)} />
+              </div>
+              <div>
+                <Label className="mb-1 block text-[11px] font-semibold uppercase text-muted-foreground">Hora</Label>
+                <Input type="time" value={schedTime} onChange={e => setSchedTime(e.target.value)} />
+              </div>
+            </div>
+
+            <div className="mt-3 space-y-2 rounded-lg border border-border/70 bg-background p-3">
+              <div className="text-[11px] font-semibold uppercase text-muted-foreground">Opções</div>
+              <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+                <Checkbox checked={schedCancelClient} onCheckedChange={v => setSchedCancelClient(Boolean(v))} className="mt-0.5" />
+                <span>
+                  Cancelar se o cliente enviar outra mensagem antes
+                  <span className="block text-[11px] text-muted-foreground">Útil para lembretes que perdem o sentido se o cliente já respondeu.</span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+                <Checkbox checked={schedCancelAgent} onCheckedChange={v => setSchedCancelAgent(Boolean(v))} className="mt-0.5" />
+                <span>
+                  Cancelar se o atendente enviar uma mensagem antes
+                  <span className="block text-[11px] text-muted-foreground">Evita mensagens duplicadas caso o atendimento continue manualmente.</span>
+                </span>
+              </label>
+            </div>
+
+            <div className="mt-3 flex justify-end">
+              <Button onClick={submitSchedule} disabled={savingSchedule || !schedBody.trim()} className="gap-2">
+                {savingSchedule ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarPlus className="h-4 w-4" />}
+                Agendar mensagem
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-1">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Agendamentos desta conversa
+            </div>
+            {loadingScheduled ? (
+              <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Carregando...
+              </div>
+            ) : scheduledList.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
+                Nenhuma mensagem agendada ainda.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {scheduledList.map(item => {
+                  const when = new Date(item.scheduledAt);
+                  const whenLabel = Number.isNaN(when.getTime())
+                    ? item.scheduledAt
+                    : new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(when);
+                  const statusMeta = {
+                    pending: { label: "Agendada", cls: "bg-info-soft text-info", Icon: Clock },
+                    sent: { label: "Enviada", cls: "bg-success-soft text-success", Icon: CheckCheck },
+                    cancelled: { label: "Cancelada", cls: "bg-secondary text-muted-foreground", Icon: Ban },
+                    failed: { label: "Falhou", cls: "bg-destructive/10 text-destructive", Icon: X },
+                  }[item.status];
+                  const StatusIcon = statusMeta.Icon;
+                  return (
+                    <div key={item.id} className="rounded-lg border border-border bg-card p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                          <CalendarClock className="h-3.5 w-3.5 text-muted-foreground" /> {whenLabel}
+                        </div>
+                        <span className={cn("flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold", statusMeta.cls)}>
+                          <StatusIcon className="h-3 w-3" /> {statusMeta.label}
+                        </span>
+                      </div>
+                      <p className="mt-1.5 whitespace-pre-wrap break-words text-sm">{item.body}</p>
+                      {(item.cancelIfClientReplies || item.cancelIfAgentReplies) && (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {item.cancelIfClientReplies && (
+                            <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] text-muted-foreground">cancela se cliente responder</span>
+                          )}
+                          {item.cancelIfAgentReplies && (
+                            <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] text-muted-foreground">cancela se atendente responder</span>
+                          )}
+                        </div>
+                      )}
+                      {item.status === "cancelled" && item.cancelledReason && (
+                        <div className="mt-1.5 text-[11px] text-muted-foreground">Motivo: {item.cancelledReason}</div>
+                      )}
+                      {item.status === "failed" && item.error && (
+                        <div className="mt-1.5 text-[11px] text-destructive">Erro: {item.error}</div>
+                      )}
+                      <div className="mt-2 flex justify-end">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-destructive"
+                          onClick={() => cancelSchedule(item)}
+                        >
+                          {item.status === "pending" ? <><Ban className="h-3.5 w-3.5" /> Cancelar</> : <><Trash2 className="h-3.5 w-3.5" /> Remover</>}
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

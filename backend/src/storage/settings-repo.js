@@ -1,7 +1,7 @@
-import { config } from "../config.js";
-import { readJson, updateJson } from "./json-store.js";
+import { getCol, collections } from "./mongo.js";
 
-const FILE = config.paths.settingsFile;
+const col = () => getCol(collections.settings);
+const DOC_ID = "app";
 const DEFAULTS = {
   openai: {
     apiKey: "",
@@ -10,7 +10,7 @@ const DEFAULTS = {
 };
 
 export async function getSettings() {
-  const stored = await readJson(FILE, {});
+  const stored = (await col().findOne({ _id: DOC_ID }, { projection: { _id: 0 } })) || {};
   return {
     ...DEFAULTS,
     ...stored,
@@ -24,17 +24,12 @@ export async function getOpenaiSettings() {
 }
 
 export async function setOpenaiSettings(patch) {
-  return updateJson(FILE, {}, current => {
-    const next = { ...current };
-    next.openai = { ...DEFAULTS.openai, ...(current.openai || {}), ...patch };
-    return next;
-  });
+  const current = await getSettings();
+  const openai = { ...DEFAULTS.openai, ...(current.openai || {}), ...patch };
+  await col().updateOne({ _id: DOC_ID }, { $set: { openai } }, { upsert: true });
+  return { ...current, openai };
 }
 
 export async function clearOpenaiKey() {
-  return updateJson(FILE, {}, current => {
-    const next = { ...current };
-    next.openai = { ...DEFAULTS.openai, ...(current.openai || {}), apiKey: "" };
-    return next;
-  });
+  return setOpenaiSettings({ apiKey: "" });
 }

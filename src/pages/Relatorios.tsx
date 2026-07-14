@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { useCRM } from "@/store/crm-store";
+import { downloadCsv } from "@/lib/csv";
 import { ClientTemperatureBadge, TagBadge } from "@/components/shared/Badges";
 import { Download, Play, FileText, Users, Bot, Flame, AlertTriangle, History, ShoppingBag, X } from "lucide-react";
 import { toast } from "sonner";
@@ -145,7 +146,7 @@ export default function Relatorios() {
       return;
     }
     const header = ["data", "cliente", "telefone", "vendedora", "status", "temperatura", "valor", "tags"];
-    const lines = reportRows.map(deal => {
+    const rows: Array<Array<string | number>> = reportRows.map(deal => {
       const sellerName = teamUsers.find(s => s.id === deal.sellerId)?.name || "";
       const stageName = stages.find(s => s.id === deal.stage)?.title || "";
       return [
@@ -157,15 +158,9 @@ export default function Relatorios() {
         deal.temperature,
         deal.estimatedValue || 0,
         deal.tags.join("|"),
-      ].map(value => `"${String(value).replace(/"/g, '""')}"`).join(",");
+      ];
     });
-    const blob = new Blob([[header.join(","), ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `relatorio-${selected}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(`relatorio-${selected}.csv`, [header, ...rows]);
     toast.success("Relatório CSV exportado");
   };
 

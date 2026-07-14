@@ -3,16 +3,15 @@ import multer from "multer";
 import fs from "node:fs/promises";
 import { getClient } from "../whatsapp/instance-manager.js";
 import { saveMedia } from "../storage/media-repo.js";
-import { appendMessage, nextOutgoingTimestamp } from "../storage/messages-repo.js";
-import { upsertConversation, getConversation } from "../storage/conversations-repo.js";
-import { mapChatFromBaileys, ackForSentResult, buildConversationId, previewFor } from "../whatsapp/message-mapper.js";
-import { emitToInstance } from "../socket/events.js";
+import { finalizeOutgoingMessage } from "../whatsapp/outgoing.js";
 import { convertToOggOpus, isOggOpus } from "../whatsapp/audio-convert.js";
+import { cancelDueToAgentReply } from "../storage/scheduled-messages-repo.js";
+import { emitToInstance } from "../socket/events.js";
+import { requireAuth } from "../middleware/require-auth.js";
 
 const upload = multer({ dest: "data/uploads", limits: { fileSize: 25 * 1024 * 1024 } });
 
 function typeForOutgoing(kind) {
-  if (kind === "audio") return "ptt";
   if (kind === "image") return "image";
   if (kind === "video") return "video";
   if (kind === "document") return "document";
@@ -21,7 +20,8 @@ function typeForOutgoing(kind) {
 
 export const sendRouter = Router();
 
-sendRouter.post("/:id/send", upload.single("file"), async (req, res) => {
+// Auth ANTES do multer: requisição não autenticada não grava arquivo em disco.
+sendRouter.post("/:id/send", requireAuth(), upload.single("file"), async (req, res) => {
   const instanceId = req.params.id;
   const client = getClient(instanceId);
   if (!client) return res.status(404).json({ error: "instância não conectada" });
@@ -35,6 +35,7 @@ sendRouter.post("/:id/send", upload.single("file"), async (req, res) => {
   try {
     let result;
     let savedLocal = null;
+    let isVoiceNote = false; // áudio como nota de voz (ptt) vs arquivo de áudio comum
     if (type === "text") {
       if (!body) return res.status(400).json({ error: "body é obrigatório para text" });
       result = await client.sendMessage(chatId, { text: body });
@@ -44,14 +45,20 @@ sendRouter.post("/:id/send", upload.single("file"), async (req, res) => {
       let mimeType = req.file.mimetype || "application/octet-stream";
       let filename = req.file.originalname || undefined;
 
-      if (type === "audio" && !isOggOpus(mimeType)) {
-        try {
-          const converted = await convertToOggOpus(req.file.path);
-          buffer = converted.buffer;
-          mimeType = converted.mimeType;
-          filename = (filename ? filename.replace(/\.[^.]+$/, "") : "audio") + ".ogg";
-        } catch (err) {
-          console.warn("[send] audio convert failed, sending original:", err.message);
+      if (type === "audio") {
+        isVoiceNote = isOggOpus(mimeType);
+        if (!isVoiceNote) {
+          try {
+            const converted = await convertToOggOpus(req.file.path);
+            buffer = converted.buffer;
+            mimeType = converted.mimeType;
+            filename = (filename ? filename.replace(/\.[^.]+$/, "") : "audio") + ".ogg";
+            isVoiceNote = true;
+          } catch (err) {
+            // Sem conversão: envia o buffer original como áudio comum com o mime
+            // verdadeiro — rotular como ogg/ptt geraria nota de voz que não toca.
+            console.warn("[send] audio convert failed, sending original as regular audio:", err.message);
+          }
         }
       }
 
@@ -62,7 +69,9 @@ sendRouter.post("/:id/send", upload.single("file"), async (req, res) => {
         payload = { image: buffer, mimetype: mimeType };
         if (body) payload.caption = body;
       } else if (type === "audio") {
-        payload = { audio: buffer, ptt: true, mimetype: "audio/ogg; codecs=opus" };
+        payload = isVoiceNote
+          ? { audio: buffer, ptt: true, mimetype: "audio/ogg; codecs=opus" }
+          : { audio: buffer, ptt: false, mimetype: mimeType };
       } else if (type === "video") {
         payload = { video: buffer, mimetype: mimeType };
         if (body) payload.caption = body;
@@ -75,56 +84,26 @@ sendRouter.post("/:id/send", upload.single("file"), async (req, res) => {
       return res.status(400).json({ error: `tipo desconhecido: ${type}` });
     }
 
-    const messageId = result?.key?.id || null;
-    const baileysTs = Number(result?.messageTimestamp);
-    const timestamp = await nextOutgoingTimestamp(instanceId, chatId, baileysTs);
-    const initialAck = ackForSentResult(result?.status);
-
-    if (messageId) {
-      const stored = {
-        id: messageId,
-        chatId,
-        instanceId,
-        fromMe: true,
-        author: "",
-        type: type === "text" ? "chat" : typeForOutgoing(type),
+    const { messageId, timestamp } = await finalizeOutgoingMessage({
+      io: req.app.get("io"),
+      client,
+      instanceId,
+      chatId,
+      result,
+      logLabel: "send",
+      message: {
+        type: type === "audio" ? (isVoiceNote ? "ptt" : "audio") : typeForOutgoing(type),
         body: type === "text" ? body : (body || ""),
-        timestamp,
         mediaUrl: savedLocal?.url,
         mediaMime: savedLocal?.mimeType,
-        ack: initialAck,
-      };
-      await appendMessage(instanceId, chatId, stored);
+      },
+    });
 
-      try {
-        const chatEntry = client.getChatById ? client.getChatById(chatId) : null;
-        const conv = mapChatFromBaileys({
-          jid: chatId,
-          chatEntry,
-          contact: null,
-          instanceId,
-          lastMessage: stored,
-        });
-        const prior = await getConversation(buildConversationId(instanceId, chatId));
-        const merged = {
-          ...conv,
-          customer: prior?.customer || conv.customer,
-          whatsappName: prior?.whatsappName || conv.whatsappName,
-          phone: prior?.phone || conv.phone,
-          avatarUrl: prior?.avatarUrl,
-          lastMessage: previewFor(stored),
-          lastMessageId: stored.id,
-          lastMessageFromMe: true,
-          lastMessageAck: initialAck,
-          lastInteraction: new Date(stored.timestamp * 1000).toISOString(),
-          unreadCount: 0,
-          unread: false,
-        };
-        const persisted = await upsertConversation(merged);
-        emitToInstance(req.app.get("io"), instanceId, "message:new", { conversation: persisted, message: stored });
-      } catch (err) {
-        console.warn(`[send] could not enrich conversation: ${err.message}`);
-      }
+    try {
+      const cancelled = await cancelDueToAgentReply(instanceId, chatId);
+      for (const sch of cancelled) emitToInstance(req.app.get("io"), instanceId, "scheduled:update", { scheduled: sch });
+    } catch (cancelErr) {
+      console.warn("[send] cancel scheduled on agent reply failed:", cancelErr.message);
     }
 
     res.json({ ok: true, messageId, timestamp });

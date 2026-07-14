@@ -1,8 +1,8 @@
 import { nanoid } from "nanoid";
-import { config } from "../config.js";
-import { readJson, updateJson } from "./json-store.js";
+import { getCol, collections } from "./mongo.js";
 
-const FILE = config.paths.prontuariosFile;
+const col = () => getCol(collections.prontuarios);
+const PROJ = { projection: { _id: 0 } };
 
 const VALID_CATEGORIES = new Set(["foto", "video", "audio", "documento", "outro"]);
 const VALID_SOURCES = new Set(["whatsapp", "upload"]);
@@ -26,55 +26,39 @@ function normalize(record) {
 }
 
 export async function listProntuarios({ dealId } = {}) {
-  const all = await readJson(FILE, []);
-  const filtered = dealId ? all.filter(p => p && p.dealId === dealId) : all;
-  return filtered
+  const query = dealId ? { dealId } : {};
+  const all = await col().find(query, PROJ).toArray();
+  return all
     .filter(p => p && p.id && p.mediaUrl)
     .sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
 }
 
 export async function getProntuario(id) {
-  const all = await readJson(FILE, []);
-  return all.find(p => p && p.id === id) || null;
+  return col().findOne({ _id: id }, PROJ);
 }
 
 export async function createProntuario(record) {
   const stored = normalize({ ...record, id: record.id || nanoid() });
   if (!stored.dealId) throw new Error("dealId é obrigatório");
   if (!stored.mediaUrl) throw new Error("mediaUrl é obrigatório");
-  await updateJson(FILE, [], current => [...current, stored]);
+  await col().insertOne({ _id: stored.id, ...stored });
   return stored;
 }
 
 export async function updateProntuario(id, patch) {
-  let updated = null;
-  await updateJson(FILE, [], current => {
-    const idx = current.findIndex(p => p && p.id === id);
-    if (idx === -1) return current;
-    updated = normalize({ ...current[idx], ...patch, id });
-    const next = current.slice();
-    next[idx] = updated;
-    return next;
-  });
+  const existing = await getProntuario(id);
+  if (!existing) return null;
+  const updated = normalize({ ...existing, ...patch, id });
+  await col().updateOne({ _id: id }, { $set: updated });
   return updated;
 }
 
 export async function deleteProntuario(id) {
-  let removed = false;
-  await updateJson(FILE, [], current => {
-    const next = current.filter(p => p && p.id !== id);
-    removed = next.length !== current.length;
-    return next;
-  });
-  return removed;
+  const res = await col().deleteOne({ _id: id });
+  return res.deletedCount > 0;
 }
 
 export async function deleteProntuariosByDeal(dealId) {
-  let removedCount = 0;
-  await updateJson(FILE, [], current => {
-    const next = current.filter(p => p && p.dealId !== dealId);
-    removedCount = current.length - next.length;
-    return next;
-  });
-  return removedCount;
+  const res = await col().deleteMany({ dealId });
+  return res.deletedCount || 0;
 }

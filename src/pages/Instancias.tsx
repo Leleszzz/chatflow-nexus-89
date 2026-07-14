@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useCRM } from "@/store/crm-store";
 import { useInstances } from "@/hooks/useInstances";
-import { InstanceStatus } from "@/lib/whatsapp-api";
+import { InstanceStatus, HistorySyncMode } from "@/lib/whatsapp-api";
 import { cn } from "@/lib/utils";
 import { Cable, Check, DownloadCloud, KeyRound, MessageSquare, Pencil, Power, QrCode, RefreshCcw, Smartphone, Trash2, Wifi, WifiOff, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
@@ -30,6 +30,7 @@ export default function Instancias() {
   const [resyncingId, setResyncingId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newHistorySync, setNewHistorySync] = useState<HistorySyncMode>("recent");
   const [creating, setCreating] = useState(false);
   const [qrInstanceId, setQrInstanceId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -59,10 +60,11 @@ export default function Instancias() {
     }
     setCreating(true);
     try {
-      const created = await createInstance(name);
+      const created = await createInstance(name, newHistorySync);
       toast.success("Instância criada — escaneie o QR Code");
       setCreateOpen(false);
       setNewName("");
+      setNewHistorySync("recent");
       setQrInstanceId(created.id);
     } catch (err) {
       toast.error(`Falha ao criar instância: ${(err as Error).message}`);
@@ -74,7 +76,7 @@ export default function Instancias() {
   const handleRestart = async (id: string) => {
     try {
       await restartInstance(id);
-      toast.success("Reconectando...");
+      toast.success("Reconectando e verificando mensagens...");
     } catch (err) {
       toast.error(`Falha: ${(err as Error).message}`);
     }
@@ -315,6 +317,35 @@ export default function Instancias() {
               placeholder="Ex.: WhatsApp Principal"
               onKeyDown={e => e.key === "Enter" && handleCreate()}
             />
+            <label className="text-xs font-semibold uppercase text-muted-foreground">Conversas antigas</label>
+            <div className="space-y-2">
+              {([
+                { value: "recent", label: "Importar conversas recentes", hint: "Traz o histórico recente que o telefone envia ao parear (recomendado)." },
+                { value: "full", label: "Importar histórico completo", hint: "Sincroniza todo o histórico — pode demorar bastante em contas grandes." },
+                { value: "none", label: "Não importar", hint: "Só mensagens novas a partir da conexão." },
+              ] as { value: HistorySyncMode; label: string; hint: string }[]).map(opt => (
+                <label
+                  key={opt.value}
+                  className={cn(
+                    "flex cursor-pointer items-start gap-2 rounded-lg border p-2.5 transition",
+                    newHistorySync === opt.value ? "border-primary bg-primary-soft/40" : "border-border hover:bg-secondary/50",
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name="historySync"
+                    value={opt.value}
+                    checked={newHistorySync === opt.value}
+                    onChange={() => setNewHistorySync(opt.value)}
+                    className="mt-0.5 accent-primary"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium">{opt.label}</span>
+                    <span className="block text-xs text-muted-foreground">{opt.hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
             <p className="text-xs text-muted-foreground">
               Após criar, um QR Code aparecerá. Abra WhatsApp &gt; Aparelhos conectados &gt; Conectar aparelho.
             </p>

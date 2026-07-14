@@ -17,14 +17,18 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Stage } from "@/lib/mock-data";
+import { KANBAN_COLORS } from "@/lib/kanban-colors";
+import { cn } from "@/lib/utils";
 
 function SortableStageItem({
   stage,
   onUpdate,
+  onColor,
   onRemove,
 }: {
   stage: Stage;
   onUpdate: (title: string) => void;
+  onColor: (color: string) => void;
   onRemove: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: stage.id });
@@ -37,28 +41,47 @@ function SortableStageItem({
     <div
       ref={setNodeRef}
       style={style}
-      className={`grid gap-2 rounded-lg border border-border/70 bg-card p-3 shadow-sm sm:grid-cols-[auto_1fr_auto] sm:items-center ${isDragging ? "z-10 opacity-70 shadow-lg" : ""}`}
+      className={`rounded-lg border border-border/70 bg-card p-3 shadow-sm ${isDragging ? "z-10 opacity-70 shadow-lg" : ""}`}
     >
-      <button
-        type="button"
-        className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground cursor-grab active:cursor-grabbing"
-        title="Arrastar etapa"
-        aria-label="Arrastar etapa"
-        {...attributes}
-        {...listeners}
-      >
-        <GripVertical className="h-4 w-4" />
-      </button>
-      <Input
-        value={stage.title}
-        onChange={event => onUpdate(event.target.value)}
-        onBlur={() => toast.success("Etapa atualizada")}
-        className="h-9 bg-background"
-      />
-      <div className="flex justify-end">
-        <Button type="button" size="icon" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={onRemove} title="Remover etapa">
-          <Trash2 className="h-4 w-4" />
-        </Button>
+      <div className="grid gap-2 sm:grid-cols-[auto_1fr_auto] sm:items-center">
+        <button
+          type="button"
+          className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground cursor-grab active:cursor-grabbing"
+          title="Arrastar etapa"
+          aria-label="Arrastar etapa"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
+        <Input
+          value={stage.title}
+          onChange={event => onUpdate(event.target.value)}
+          onBlur={() => toast.success("Etapa atualizada")}
+          className="h-9 bg-background"
+        />
+        <div className="flex justify-end">
+          <Button type="button" size="icon" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={onRemove} title="Remover etapa">
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 sm:pl-11">
+        <span className="mr-1 text-[11px] text-muted-foreground">Cor da coluna:</span>
+        {KANBAN_COLORS.map(color => (
+          <button
+            key={color.value}
+            type="button"
+            title={color.label}
+            aria-label={`Cor ${color.label}`}
+            onClick={() => onColor(color.value)}
+            className={cn(
+              "h-5 w-5 rounded-full transition",
+              color.swatch,
+              stage.color === color.value ? "ring-2 ring-offset-1 ring-foreground" : "opacity-70 hover:opacity-100",
+            )}
+          />
+        ))}
       </div>
     </div>
   );
@@ -137,6 +160,7 @@ export function StageManagerDialog({ open, onOpenChange }: { open: boolean; onOp
                     key={stage.id}
                     stage={stage}
                     onUpdate={title => updateStage(stage.id, { title })}
+                    onColor={color => { updateStage(stage.id, { color }); toast.success("Cor da coluna atualizada"); }}
                     onRemove={() => handleRemove(stage.id, stage.title)}
                   />
                 ))}

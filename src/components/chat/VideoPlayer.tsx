@@ -1,15 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Maximize, Minimize, Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatTime } from "@/lib/format";
 
 const SPEEDS = [1, 1.5, 2] as const;
-
-const formatTime = (s: number) => {
-  if (!Number.isFinite(s) || s < 0) return "0:00";
-  const m = Math.floor(s / 60);
-  const sec = Math.floor(s % 60);
-  return `${m}:${sec.toString().padStart(2, "0")}`;
-};
 
 type Props = {
   src: string;

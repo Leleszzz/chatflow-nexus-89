@@ -1,7 +1,8 @@
 import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
 import { decodeAuthToken } from "@/lib/auth-token";
-import { Deal, DealStage, INITIAL_DEALS, INITIAL_AGENTS, Agent, AgentUsage, ALL_TAGS, STAGES, Stage } from "@/lib/mock-data";
+import { Deal, DealStage, INITIAL_AGENTS, Agent, AgentUsage, ALL_TAGS, STAGES, Stage } from "@/lib/mock-data";
 import { setApiAuthToken, whatsappApi, UserRecord, ProntuarioAttachment, ProntuarioCategory } from "@/lib/whatsapp-api";
+import { getSocket, setSocketAuthToken } from "@/lib/whatsapp-socket";
 
 const inferProntuarioCategory = (
   messageType?: string,
@@ -298,11 +299,6 @@ const loadAgents = (): Agent[] => {
   return Array.isArray(stored) ? stored.map(normalizeAgent) : [];
 };
 
-const SAMPLE_DEAL_IDS = new Set(Array.from({ length: 14 }, (_, index) => `d${index + 1}`));
-
-const loadInitialDeals = () => loadStored("crm-deals", INITIAL_DEALS)
-  .filter(deal => !SAMPLE_DEAL_IDS.has(deal.id));
-
 const INITIAL_APPOINTMENTS: Appointment[] = [
   {
     id: "a1",
@@ -362,12 +358,12 @@ const toTeamUser = (record: UserRecord): TeamUser => ({
 });
 
 export function CRMProvider({ children }: { children: ReactNode }) {
-  const [deals, setDeals] = useState<Deal[]>(loadInitialDeals);
+  const [deals, setDeals] = useState<Deal[]>([]);
   const [finished, setFinished] = useState<FinishedDeal[]>([]);
   const [agents, setAgents] = useState<Agent[]>(() => loadAgents());
   const [agentUsage, setAgentUsage] = useState<Record<string, AgentUsage>>({});
   const [tags, setTags] = useState<string[]>(() => loadStored("crm-tags", ALL_TAGS));
-  const [stages, setStages] = useState<Stage[]>(() => loadStored("crm-stages", STAGES));
+  const [stages, setStages] = useState<Stage[]>(STAGES);
   const [appointments, setAppointments] = useState<Appointment[]>(() => loadStored("crm-appointments", INITIAL_APPOINTMENTS));
   const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
   const [authToken, setAuthToken] = useState<string | null>(() => loadStored("crm-auth-token", null));
@@ -384,14 +380,6 @@ export function CRMProvider({ children }: { children: ReactNode }) {
 
   const currentUser = teamUsers.find(user => user.id === currentUserId && user.active) || null;
   const isAdmin = currentUser?.role === "Administrador";
-
-  useEffect(() => {
-    window.localStorage.setItem("crm-deals", JSON.stringify(deals));
-  }, [deals]);
-
-  useEffect(() => {
-    window.localStorage.setItem("crm-stages", JSON.stringify(stages));
-  }, [stages]);
 
   useEffect(() => {
     window.localStorage.setItem("crm-appointments", JSON.stringify(appointments));
@@ -432,6 +420,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setApiAuthToken(authToken);
+    setSocketAuthToken(authToken);
   }, [authToken]);
 
   const refreshTeamUsers = useCallback(async () => {
@@ -449,6 +438,24 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       setProntuarios(list);
     } catch (err) {
       console.warn("[crm-store] listProntuarios failed", err);
+    }
+  }, []);
+
+  const refreshDeals = useCallback(async () => {
+    try {
+      const list = await whatsappApi.listDeals();
+      setDeals(list);
+    } catch (err) {
+      console.warn("[crm-store] listDeals failed", err);
+    }
+  }, []);
+
+  const refreshStages = useCallback(async () => {
+    try {
+      const list = await whatsappApi.listStages();
+      if (Array.isArray(list) && list.length) setStages(list);
+    } catch (err) {
+      console.warn("[crm-store] listStages failed", err);
     }
   }, []);
 
@@ -527,7 +534,43 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     refreshTeamUsers();
     refreshProntuarios();
     refreshAgentUsage();
-  }, [currentUserId, refreshTeamUsers, refreshProntuarios, refreshAgentUsage]);
+    refreshDeals();
+    refreshStages();
+  }, [currentUserId, refreshTeamUsers, refreshProntuarios, refreshAgentUsage, refreshDeals, refreshStages]);
+
+  // Sincronização em tempo real dos cards/etapas (eventos do backend, já filtrados por permissão).
+  useEffect(() => {
+    if (!currentUserId) return;
+    const socket = getSocket();
+    const upsertDeal = (payload: { deal: Deal }) => {
+      const deal = payload?.deal;
+      if (!deal?.id) return;
+      setDeals(prev => {
+        const idx = prev.findIndex(d => d.id === deal.id);
+        if (idx === -1) return [deal, ...prev];
+        const next = prev.slice();
+        next[idx] = deal;
+        return next;
+      });
+    };
+    const onDealDelete = (payload: { deal: Deal }) => {
+      const id = payload?.deal?.id;
+      if (id) setDeals(prev => prev.filter(d => d.id !== id));
+    };
+    const onStages = (payload: { stages: Stage[] }) => {
+      if (Array.isArray(payload?.stages) && payload.stages.length) setStages(payload.stages);
+    };
+    socket.on("deal:new", upsertDeal);
+    socket.on("deal:update", upsertDeal);
+    socket.on("deal:delete", onDealDelete);
+    socket.on("stages:update", onStages);
+    return () => {
+      socket.off("deal:new", upsertDeal);
+      socket.off("deal:update", upsertDeal);
+      socket.off("deal:delete", onDealDelete);
+      socket.off("stages:update", onStages);
+    };
+  }, [currentUserId]);
 
   useEffect(() => {
     if (currentUser) setAccountProfile(profileFromUser(currentUser));
@@ -579,80 +622,81 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     return hasDirectAccess || hasConversationAccess || hasTagAccess;
   };
 
-  const addDeal = (deal: Deal) => setDeals(prev => [deal, ...prev]);
+  // Cards do Kanban são persistidos no backend (filtrados por permissão no servidor)
+  // e sincronizados via socket. As mutações fazem update otimista + chamada à API.
+  const addDeal = (deal: Deal) => {
+    setDeals(prev => [deal, ...prev]);
+    whatsappApi.createDeal(deal).catch(err => console.warn("[crm-store] createDeal failed", err));
+  };
   const removeDeal = (id: string) => {
     setDeals(prev => prev.filter(deal => deal.id !== id));
     setAppointments(prev => prev.filter(appointment => appointment.dealId !== id));
     setProntuarios(prev => prev.filter(p => p.dealId !== id));
+    whatsappApi.deleteDeal(id).catch(err => console.warn("[crm-store] deleteDeal failed", err));
     whatsappApi.deleteProntuariosByDeal(id).catch(err => {
       console.warn("[crm-store] deleteProntuariosByDeal failed", err);
     });
   };
-  const moveDeal = (id: string, stage: DealStage) =>
+  const moveDeal = (id: string, stage: DealStage) => {
     setDeals(prev => prev.map(d => (d.id === id ? { ...d, stage } : d)));
-  const updateDeal = (id: string, patch: Partial<Deal>) =>
+    whatsappApi.updateDeal(id, { stage }).catch(err => console.warn("[crm-store] moveDeal failed", err));
+  };
+  const updateDeal = (id: string, patch: Partial<Deal>) => {
     setDeals(prev => prev.map(d => (d.id === id ? { ...d, ...patch } : d)));
+    whatsappApi.updateDeal(id, patch).catch(err => console.warn("[crm-store] updateDeal failed", err));
+  };
+  // Etapas/colunas s\u00e3o compartilhadas (backend). Muta\u00e7\u00f5es fazem update otimista
+  // e persistem; o broadcast "stages:update" reconcilia todos os clientes.
+  const persistStageOrder = (ordered: Stage[]) => {
+    whatsappApi.reorderStages(ordered.map(s => s.id)).catch(err => console.warn("[crm-store] reorderStages failed", err));
+  };
   const addStage = (title: string, color = "bg-primary") => {
     const cleanTitle = title.trim();
     if (!cleanTitle) return;
-    const baseId = cleanTitle
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || `etapa-${Date.now()}`;
-    const id = stages.some(stage => stage.id === baseId) ? `${baseId}-${Date.now()}` : baseId;
-    const stage = { id, title: cleanTitle, color };
-
-    setStages(prev => {
-      const closingIndex = prev.findIndex(item => item.id === "fechado");
-      if (closingIndex < 0) return [...prev, stage];
-      return [...prev.slice(0, closingIndex), stage, ...prev.slice(closingIndex)];
-    });
+    whatsappApi.createStage({ title: cleanTitle, color })
+      .then(refreshStages)
+      .catch(err => console.warn("[crm-store] createStage failed", err));
   };
-  const updateStage = (id: string, patch: Partial<Stage>) =>
+  const updateStage = (id: string, patch: Partial<Stage>) => {
     setStages(prev => prev.map(stage => (stage.id === id ? { ...stage, ...patch } : stage)));
-  const moveStage = (id: string, direction: "up" | "down") =>
-    setStages(prev => {
-      const index = prev.findIndex(stage => stage.id === id);
-      if (index < 0) return prev;
-
-      const targetIndex = direction === "up" ? index - 1 : index + 1;
-      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
-
-      const next = [...prev];
-      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
-      return next;
-    });
-  const reorderStage = (activeId: string, overId: string) =>
-    setStages(prev => {
-      const activeIndex = prev.findIndex(stage => stage.id === activeId);
-      const overIndex = prev.findIndex(stage => stage.id === overId);
-      if (activeIndex < 0 || overIndex < 0 || activeIndex === overIndex) return prev;
-
-      const next = [...prev];
-      const [moved] = next.splice(activeIndex, 1);
-      next.splice(overIndex, 0, moved);
-      return next;
-    });
+    whatsappApi.updateStage(id, { title: patch.title, color: patch.color })
+      .catch(err => console.warn("[crm-store] updateStage failed", err));
+  };
+  const moveStage = (id: string, direction: "up" | "down") => {
+    const index = stages.findIndex(stage => stage.id === id);
+    if (index < 0) return;
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= stages.length) return;
+    const next = [...stages];
+    [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+    setStages(next);
+    persistStageOrder(next);
+  };
+  const reorderStage = (activeId: string, overId: string) => {
+    const activeIndex = stages.findIndex(stage => stage.id === activeId);
+    const overIndex = stages.findIndex(stage => stage.id === overId);
+    if (activeIndex < 0 || overIndex < 0 || activeIndex === overIndex) return;
+    const next = [...stages];
+    const [moved] = next.splice(activeIndex, 1);
+    next.splice(overIndex, 0, moved);
+    setStages(next);
+    persistStageOrder(next);
+  };
   const removeStage = (id: string) => {
     if (id === "fechado" || id === "perdido") return false;
     const fallback = stages.find(stage => stage.id !== id)?.id || "novo-lead";
     setStages(prev => prev.filter(stage => stage.id !== id));
     setDeals(prev => prev.map(deal => (deal.stage === id ? { ...deal, stage: fallback } : deal)));
+    whatsappApi.deleteStage(id).catch(err => console.warn("[crm-store] deleteStage failed", err));
     return true;
   };
   const finishDeal = (f: FinishedDeal) => {
     setFinished(prev => [...prev, f]);
-    setDeals(prev => prev.map(deal => {
-      if (deal.id !== f.dealId) return deal;
-
-      return {
-        ...deal,
-        stage: f.result === "venda" ? "fechado" : "perdido",
-        estimatedValue: f.result === "venda" && f.amount !== undefined ? f.amount : deal.estimatedValue,
-      };
-    }));
+    const current = deals.find(deal => deal.id === f.dealId);
+    const stage = f.result === "venda" ? "fechado" : "perdido";
+    const estimatedValue = f.result === "venda" && f.amount !== undefined ? f.amount : current?.estimatedValue;
+    setDeals(prev => prev.map(deal => (deal.id === f.dealId ? { ...deal, stage, estimatedValue } : deal)));
+    whatsappApi.updateDeal(f.dealId, { stage, estimatedValue }).catch(err => console.warn("[crm-store] finishDeal failed", err));
   };
   const addAppointment = (appointment: Appointment) =>
     setAppointments(prev => [...prev, appointment].sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`)));

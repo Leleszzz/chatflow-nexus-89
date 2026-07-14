@@ -32,10 +32,6 @@ export async function saveMedia(buffer, mimeType) {
   return { filename, mimeType: cleanMime(mimeType), url: `/api/media/${filename}` };
 }
 
-export async function saveMediaFromBase64(base64, mimeType) {
-  return saveMedia(Buffer.from(base64, "base64"), mimeType);
-}
-
 export async function saveMediaFromBuffer(buffer, mimeType) {
   return saveMedia(buffer, mimeType);
 }

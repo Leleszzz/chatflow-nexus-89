@@ -13,6 +13,13 @@ export default defineConfig(({ mode }) => ({
     hmr: {
       overlay: false,
     },
+    // O projeto vive dentro do OneDrive, e o watcher nativo do Windows não recebe
+    // os eventos de arquivo dessas pastas sincronizadas — sem polling, as edições
+    // não chegam ao navegador e ele segue rodando um bundle velho.
+    watch: {
+      usePolling: true,
+      interval: 400,
+    },
     proxy: {
       "/api": {
         target: "http://localhost:3030",

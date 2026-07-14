@@ -1,15 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatTime } from "@/lib/format";
 
 const SPEEDS = [1, 1.5, 2] as const;
-
-const formatTime = (s: number) => {
-  if (!Number.isFinite(s) || s < 0) return "0:00";
-  const m = Math.floor(s / 60);
-  const sec = Math.floor(s % 60);
-  return `${m}:${sec.toString().padStart(2, "0")}`;
-};
 
 export function AudioMessage({ src, mine = false }: { src: string; mine?: boolean }) {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -22,10 +16,29 @@ export function AudioMessage({ src, mine = false }: { src: string; mine?: boolea
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
-    const onTime = () => setCurrent(a.currentTime);
+    // Áudios do WhatsApp (WebM/Opus) muitas vezes não têm duração nos
+    // metadados (a.duration === Infinity). Forçamos um seek até o fim para
+    // que o browser calcule a duração real, depois voltamos ao início.
+    let fixingDuration = false;
+    const onTime = () => {
+      if (fixingDuration) return;
+      setCurrent(a.currentTime);
+    };
     const onDur = () => {
       const d = a.duration;
-      if (Number.isFinite(d)) setDuration(d);
+      if (Number.isFinite(d) && d > 0) {
+        setDuration(d);
+      } else if (d === Infinity && !fixingDuration) {
+        fixingDuration = true;
+        a.currentTime = 1e101;
+      }
+    };
+    const onSeeked = () => {
+      if (!fixingDuration) return;
+      fixingDuration = false;
+      if (Number.isFinite(a.duration)) setDuration(a.duration);
+      a.currentTime = 0;
+      setCurrent(0);
     };
     const onEnd = () => { setPlaying(false); setCurrent(0); a.currentTime = 0; };
     const onPlay = () => setPlaying(true);
@@ -33,6 +46,7 @@ export function AudioMessage({ src, mine = false }: { src: string; mine?: boolea
     a.addEventListener("timeupdate", onTime);
     a.addEventListener("loadedmetadata", onDur);
     a.addEventListener("durationchange", onDur);
+    a.addEventListener("seeked", onSeeked);
     a.addEventListener("ended", onEnd);
     a.addEventListener("play", onPlay);
     a.addEventListener("pause", onPause);
@@ -40,6 +54,7 @@ export function AudioMessage({ src, mine = false }: { src: string; mine?: boolea
       a.removeEventListener("timeupdate", onTime);
       a.removeEventListener("loadedmetadata", onDur);
       a.removeEventListener("durationchange", onDur);
+      a.removeEventListener("seeked", onSeeked);
       a.removeEventListener("ended", onEnd);
       a.removeEventListener("play", onPlay);
       a.removeEventListener("pause", onPause);

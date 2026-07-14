@@ -6,16 +6,19 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon --watch src --ext js,json --ignore data --ignore node_modules --delay 500ms src/server.js"
+    "dev": "nodemon --legacy-watch --watch src --ext js,json --ignore data --ignore node_modules --delay 500ms src/server.js",
+    "test": "node --test tests/",
+    "test:connection": "node scripts/test-connection.js"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
-    "@whiskeysockets/baileys": "^6.7.16",
+    "@whiskeysockets/baileys": "7.0.0-rc13",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "ffmpeg-static": "^5.3.0",
     "mime-types": "^2.1.35",
+    "mongodb": "^6.21.0",
     "multer": "^2.0.1",
     "nanoid": "^5.0.7",
     "pino": "^9.5.0",

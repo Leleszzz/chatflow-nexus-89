@@ -404,4 +404,3 @@ export function useDashboardMetrics(args: DashboardMetricsArgs): DashboardMetric
 }
 
 export { formatSecondsAsMinSec };
-export const __dashboardInternals = { parseTs, normalizePhone, HOUR_MS, DAY_MS };

@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useCRM } from "@/store/crm-store";
+import { downloadCsv } from "@/lib/csv";
 import { AlertTriangle, Bot, CheckCircle2, CreditCard, Download, FileSpreadsheet, LockKeyhole, MessageSquare, Send, Upload } from "lucide-react";
 import { toast } from "sonner";
 
@@ -16,21 +17,6 @@ const sampleRows = [
 ];
 const formatBRL = (value: number) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
-
-const csvEscape = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
-
-const downloadCsv = (filename: string, rows: Array<Array<string | number>>) => {
-  const csv = rows.map(row => row.map(csvEscape).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-};
 
 export default function DisparoEmMassa() {
   const { isAdmin } = useCRM();

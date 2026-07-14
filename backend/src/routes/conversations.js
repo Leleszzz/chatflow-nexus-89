@@ -1,9 +1,14 @@
 import { Router } from "express";
 import { listConversations, getConversation, upsertConversation } from "../storage/conversations-repo.js";
 import { listMessages } from "../storage/messages-repo.js";
-import { buildConversationId, formatPhone } from "../whatsapp/message-mapper.js";
+import { buildConversationId, formatPhone, isPlaceholderName } from "../whatsapp/message-mapper.js";
+import { getClient } from "../whatsapp/instance-manager.js";
+import { requireAuth } from "../middleware/require-auth.js";
 
 export const conversationsRouter = Router();
+
+// Todas as rotas de conversas exigem usuário autenticado.
+conversationsRouter.use(requireAuth());
 
 function chatIdFromPhone(phone) {
   const raw = String(phone || "").trim();
@@ -46,10 +51,29 @@ conversationsRouter.patch("/:id", async (req, res) => {
 
 conversationsRouter.post("/start", async (req, res) => {
   const instanceId = String(req.body?.instanceId || "").trim();
-  const chatId = chatIdFromPhone(req.body?.phone || req.body?.chatId);
+  let chatId = chatIdFromPhone(req.body?.phone || req.body?.chatId);
   const name = String(req.body?.customer || req.body?.name || "").trim();
   if (!instanceId) return res.status(400).json({ error: "instanceId é obrigatório" });
   if (!chatId) return res.status(400).json({ error: "telefone inválido" });
+
+  // Resolve o JID autoritativo via WhatsApp: corrige normalizações do servidor
+  // (ex.: 9º dígito no Brasil) e aprende o LID do contato, para que a resposta
+  // que chega via @lid caia NESTA conversa em vez de abrir uma duplicata.
+  let resolvedName = "";
+  const client = getClient(instanceId);
+  if (client?.onWhatsApp) {
+    try {
+      const results = await client.onWhatsApp(chatId.split("@")[0]);
+      const hit = Array.isArray(results) ? (results.find(r => r?.exists) || results[0]) : null;
+      if (typeof hit?.jid === "string" && hit.jid.endsWith("@s.whatsapp.net")) chatId = hit.jid;
+      const lid = typeof hit?.lid === "string" ? hit.lid : "";
+      if (lid && lid.endsWith("@lid")) {
+        client.rememberJidMapping?.(lid, chatId);
+        await client.mergeKnownDuplicate?.(chatId); // funde duplicata @lid já existente
+      }
+    } catch { /* segue com o número digitado */ }
+    try { resolvedName = client.knownNameFor?.(chatId) || ""; } catch { /* ignora */ }
+  }
 
   const id = buildConversationId(instanceId, chatId);
   const prior = await getConversation(id);
@@ -59,8 +83,8 @@ conversationsRouter.post("/start", async (req, res) => {
     id,
     instanceId,
     chatId,
-    customer: prior?.customer || name || phone || chatId,
-    whatsappName: prior?.whatsappName || name || "",
+    customer: (isPlaceholderName(prior?.customer) ? "" : prior.customer) || name || resolvedName || phone,
+    whatsappName: (isPlaceholderName(prior?.whatsappName) ? "" : prior.whatsappName) || resolvedName || name || "",
     phone: prior?.phone || phone,
     isGroup: false,
     lastMessage: prior?.lastMessage || "",
@@ -81,7 +105,30 @@ conversationsRouter.post("/start", async (req, res) => {
 conversationsRouter.post("/:id/read", async (req, res) => {
   const conv = await getConversation(req.params.id);
   if (!conv) return res.status(404).json({ error: "conversa não encontrada" });
+  const unreadBefore = Number(conv.unreadCount) || 0;
   const next = await upsertConversation({ ...conv, unread: false, unreadCount: 0 });
+
+  // Best-effort: envia os recibos de leitura (tick azul) ao WhatsApp para as
+  // mensagens recebidas não lidas. Nunca falha a rota — instância offline ou
+  // erro de envio apenas deixam de marcar como lida no telefone do contato.
+  if (unreadBefore > 0) {
+    try {
+      const client = getClient(conv.instanceId);
+      if (client?.isSocketOpen?.() && typeof client.readMessages === "function") {
+        const cap = Math.min(unreadBefore, 100);
+        // Busca mais que o cap porque mensagens enviadas (fromMe) se intercalam.
+        const msgs = await listMessages(conv.instanceId, conv.chatId, { limit: cap + 30 });
+        const keys = msgs
+          .filter(m => !m.fromMe)
+          .slice(-cap)
+          .map(m => ({ remoteJid: conv.chatId, id: m.id, fromMe: false }));
+        if (keys.length) await client.readMessages(keys);
+      }
+    } catch (err) {
+      console.warn(`[conversations:read] recibo de leitura falhou: ${err.message}`);
+    }
+  }
+
   res.json(next);
 });
 

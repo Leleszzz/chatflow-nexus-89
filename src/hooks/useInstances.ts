@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
-import { whatsappApi, WhatsAppInstance, InstanceStatus } from "@/lib/whatsapp-api";
+import { toast } from "sonner";
+import { whatsappApi, WhatsAppInstance, InstanceStatus, HistorySyncMode } from "@/lib/whatsapp-api";
 import { getSocket } from "@/lib/whatsapp-socket";
 
 export function useInstances() {
@@ -60,12 +61,26 @@ export function useInstances() {
         ? { ...i, conversations: payload.chatsTotal }
         : i));
     };
+    const onSyncRecentDone = (payload: { instanceId: string; chatsChecked: number; ok: boolean }) => {
+      const now = new Date().toISOString();
+      setInstances(curr => curr.map(i => i.id === payload.instanceId
+        ? { ...i, lastSync: now }
+        : i));
+      const inst = instances.find(i => i.id === payload.instanceId);
+      const label = inst?.name || "Instância";
+      if (payload.ok) {
+        toast.success(`${label}: mensagens verificadas e sincronizadas (${payload.chatsChecked} conversas)`);
+      } else {
+        toast.error(`${label}: falha ao verificar a sincronização das mensagens`);
+      }
+    };
 
     socket.on("instance:status", onStatus);
     socket.on("instance:qr", onQr);
     socket.on("instance:pairing-code", onPairingCode);
     socket.on("instance:ready", onReady);
     socket.on("instance:sync-progress", onSyncProgress);
+    socket.on("instance:sync-recent-done", onSyncRecentDone);
 
     return () => {
       socket.off("instance:status", onStatus);
@@ -73,11 +88,12 @@ export function useInstances() {
       socket.off("instance:pairing-code", onPairingCode);
       socket.off("instance:ready", onReady);
       socket.off("instance:sync-progress", onSyncProgress);
+      socket.off("instance:sync-recent-done", onSyncRecentDone);
     };
   }, [instances.length]);
 
-  const createInstance = useCallback(async (name: string) => {
-    const created = await whatsappApi.createInstance(name);
+  const createInstance = useCallback(async (name: string, historySync: HistorySyncMode = "recent") => {
+    const created = await whatsappApi.createInstance(name, historySync);
     setInstances(curr => [...curr, created]);
     getSocket().emit("join", created.id);
     return created;

@@ -111,11 +111,30 @@ export function useWhatsAppMessages(conversationId: string | null | undefined) {
     const onAck = (payload: { messageId: string; chatId: string; ack: WAMessage["ack"] }) => {
       setMessages(curr => curr.map(m => m.id === payload.messageId ? { ...m, ack: payload.ack } : m));
     };
+    // Edição ("editada") ou exclusão ("apagar para todos") vinda do WhatsApp.
+    const onMessageUpdate = (payload: { messageId: string; chatId: string; deleted?: boolean; edited?: boolean; body?: string }) => {
+      setMessages(curr => curr.map(m => {
+        if (m.id !== payload.messageId) return m;
+        if (payload.deleted) return { ...m, deleted: true };
+        if (payload.edited) return { ...m, edited: true, body: payload.body ?? m.body };
+        return m;
+      }));
+    };
+    // Mídia baixada em segundo plano após o message:new — preenche sem refetch.
+    const onMedia = (payload: { messageId: string; chatId: string; mediaUrl: string; mediaMime?: string }) => {
+      setMessages(curr => curr.map(m => m.id === payload.messageId
+        ? { ...m, mediaUrl: payload.mediaUrl, mediaMime: payload.mediaMime }
+        : m));
+    };
     socket.on("message:new", onNewMessage);
     socket.on("message:ack", onAck);
+    socket.on("message:update", onMessageUpdate);
+    socket.on("message:media", onMedia);
     return () => {
       socket.off("message:new", onNewMessage);
       socket.off("message:ack", onAck);
+      socket.off("message:update", onMessageUpdate);
+      socket.off("message:media", onMedia);
     };
   }, [conversationId]);
 

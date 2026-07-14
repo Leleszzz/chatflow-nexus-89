@@ -1,4 +1,10 @@
+import type { Deal, Stage } from "@/lib/mock-data";
+
 export type InstanceStatus = "ativa" | "desconectada" | "desligada" | "conectando" | "qr-pendente" | "codigo-pendente";
+
+// Importação de conversas antigas na primeira conexão:
+// none = só mensagens novas | recent = histórico recente | full = histórico completo
+export type HistorySyncMode = "none" | "recent" | "full";
 
 export type WhatsAppInstance = {
   id: string;
@@ -8,6 +14,7 @@ export type WhatsAppInstance = {
   lastSync: string;
   conversations: number;
   historySynced: boolean;
+  historySync?: HistorySyncMode;
   createdAt: string;
 };
 
@@ -45,6 +52,8 @@ export type WAMessage = {
   mediaMime?: string;
   ack: 0 | 1 | 2 | 3 | 4;
   quotedMsgId?: string;
+  edited?: boolean;
+  deleted?: boolean;
 };
 
 export type ProntuarioCategory = "foto" | "video" | "audio" | "documento" | "outro";
@@ -65,6 +74,27 @@ export type ProntuarioAttachment = {
   uploadedBy?: string;
 };
 
+export type ScheduledMessageStatus = "pending" | "sent" | "cancelled" | "failed";
+
+export type ScheduledMessage = {
+  id: string;
+  instanceId: string;
+  chatId: string;
+  conversationId: string | null;
+  body: string;
+  scheduledAt: string;
+  status: ScheduledMessageStatus;
+  cancelIfClientReplies: boolean;
+  cancelIfAgentReplies: boolean;
+  note: string;
+  createdBy: string | null;
+  createdAt: string;
+  sentAt: string | null;
+  sentMessageId: string | null;
+  cancelledReason: string | null;
+  error: string | null;
+};
+
 export type UserRecord = {
   id: string;
   name: string;
@@ -81,7 +111,19 @@ export type UserRecord = {
   receivesNewLeads?: boolean;
 };
 
-let authToken: string | null = null;
+// Lido já no carregamento do módulo: os efeitos de página (ex.: useInstances)
+// rodam ANTES do efeito do provider que chama setApiAuthToken, então sem isto o
+// primeiro request de cada reload sairia sem Authorization e tomaria 401.
+function readStoredToken(): string | null {
+  try {
+    const raw = window.localStorage.getItem("crm-auth-token");
+    return raw ? (JSON.parse(raw) as string) : null;
+  } catch {
+    return null;
+  }
+}
+
+let authToken: string | null = readStoredToken();
 
 export function setApiAuthToken(token: string | null) {
   authToken = token;
@@ -106,8 +148,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const whatsappApi = {
   listInstances: () => request<WhatsAppInstance[]>("/api/instances"),
-  createInstance: (name: string) =>
-    request<WhatsAppInstance>("/api/instances", { method: "POST", body: JSON.stringify({ name }) }),
+  createInstance: (name: string, historySync: HistorySyncMode = "recent") =>
+    request<WhatsAppInstance>("/api/instances", { method: "POST", body: JSON.stringify({ name, historySync }) }),
   getInstance: (id: string) => request<WhatsAppInstance>(`/api/instances/${encodeURIComponent(id)}`),
   updateInstance: (id: string, patch: { name?: string }) =>
     request<WhatsAppInstance>(`/api/instances/${encodeURIComponent(id)}`, {
@@ -160,7 +202,9 @@ export const whatsappApi = {
     form.append("chatId", chatId);
     form.append("type", "text");
     form.append("body", body);
-    const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/send`, { method: "POST", body: form });
+    const headers: Record<string, string> = {};
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
+    const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/send`, { method: "POST", body: form, headers });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     return res.json() as Promise<{ ok: true; messageId: string | null; timestamp: number }>;
   },
@@ -170,7 +214,9 @@ export const whatsappApi = {
     form.append("type", type);
     form.append("body", caption);
     form.append("file", file);
-    const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/send`, { method: "POST", body: form });
+    const headers: Record<string, string> = {};
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
+    const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/send`, { method: "POST", body: form, headers });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     return res.json() as Promise<{ ok: true; messageId: string | null; timestamp: number }>;
   },
@@ -286,6 +332,34 @@ export const whatsappApi = {
       body: JSON.stringify(payload),
     }),
 
+  listScheduledMessages: (params: { conversationId?: string; instanceId?: string; status?: ScheduledMessageStatus } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.conversationId) qs.set("conversationId", params.conversationId);
+    if (params.instanceId) qs.set("instanceId", params.instanceId);
+    if (params.status) qs.set("status", params.status);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return request<ScheduledMessage[]>(`/api/scheduled-messages${suffix}`);
+  },
+  createScheduledMessage: (payload: {
+    instanceId: string;
+    chatId: string;
+    conversationId?: string;
+    body: string;
+    scheduledAt: string;
+    cancelIfClientReplies?: boolean;
+    cancelIfAgentReplies?: boolean;
+    note?: string;
+    createdBy?: string;
+  }) =>
+    request<ScheduledMessage>("/api/scheduled-messages", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  cancelScheduledMessage: (id: string, opts: { purge?: boolean } = {}) =>
+    request<ScheduledMessage | { ok: true }>(`/api/scheduled-messages/${encodeURIComponent(id)}${opts.purge ? "?purge=true" : ""}`, {
+      method: "DELETE",
+    }),
+
   getAgentUsage: () =>
     request<Record<string, { promptTokens: number; completionTokens: number; costUsd: number; calls?: number; lastUpdatedAt?: string | null }>>(
       "/api/agents/usage",
@@ -293,4 +367,24 @@ export const whatsappApi = {
 
   resetAgentUsage: (agentId: string) =>
     request<{ ok: true }>(`/api/agents/usage/${encodeURIComponent(agentId)}`, { method: "DELETE" }),
+
+  // ---- Kanban: deals (cards) ----
+  listDeals: () => request<Deal[]>("/api/deals"),
+  createDeal: (deal: Deal) =>
+    request<Deal>("/api/deals", { method: "POST", body: JSON.stringify(deal) }),
+  updateDeal: (id: string, patch: Partial<Deal>) =>
+    request<Deal>(`/api/deals/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteDeal: (id: string) =>
+    request<{ ok: true }>(`/api/deals/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // ---- Kanban: stages (colunas) ----
+  listStages: () => request<Stage[]>("/api/stages"),
+  createStage: (payload: { title: string; color?: string }) =>
+    request<Stage>("/api/stages", { method: "POST", body: JSON.stringify(payload) }),
+  updateStage: (id: string, patch: { title?: string; color?: string }) =>
+    request<Stage>(`/api/stages/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  reorderStages: (orderedIds: string[]) =>
+    request<Stage[]>("/api/stages/reorder", { method: "POST", body: JSON.stringify({ orderedIds }) }),
+  deleteStage: (id: string) =>
+    request<{ ok: true; stages: Stage[] }>(`/api/stages/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };

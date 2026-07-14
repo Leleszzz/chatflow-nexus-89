@@ -22,6 +22,35 @@ export function buildConversationId(instanceId, chatId) {
   return `${instanceId}__${chatId}`;
 }
 
+// Telefone formatado a partir do JID, quando ele É um número (@s.whatsapp.net).
+// Para @lid devolve "" — o WhatsApp não revela o número por trás do LID.
+export function phoneFromChatId(chatId) {
+  if (typeof chatId !== "string" || !chatId.endsWith("@s.whatsapp.net")) return "";
+  const user = chatId.split("@")[0].split(":")[0];
+  return /^\d{8,15}$/.test(user) ? formatPhone(user) : "";
+}
+
+function looksLikeJid(s) {
+  return typeof s === "string" && /@(s\.whatsapp\.net|lid)$/.test(s);
+}
+function looksLikeRawDigits(s) {
+  return typeof s === "string" && /^\d{8,}$/.test(s);
+}
+// Nome "provisório" (vazio, um JID ou só dígitos) que deve ser substituído por um melhor.
+export function isPlaceholderName(s) {
+  return !s || looksLikeJid(s) || looksLikeRawDigits(s);
+}
+
+// Melhor nome REAL entre vários registros de contato do mesmo número (o cadastro
+// pode estar sob o @lid ou sob o @s.whatsapp.net). Ignora nomes provisórios.
+export function bestName(contacts) {
+  for (const c of contacts || []) {
+    const name = c?.notify || c?.name || c?.verifiedName || c?.short;
+    if (name && !isPlaceholderName(name)) return name;
+  }
+  return "";
+}
+
 export function jidIsGroup(jid) {
   return typeof jid === "string" && jid.endsWith("@g.us");
 }
@@ -40,13 +69,13 @@ export function isGroupChat(chatOrJid) {
   if (typeof chatOrJid === "string") return jidIsGroup(chatOrJid);
   if (chatOrJid.isGroup) return true;
   const id = chatOrJid.id || "";
-  return jidIsGroup(typeof id === "string" ? id : id?._serialized || "");
+  return jidIsGroup(typeof id === "string" ? id : "");
 }
 
 export function isUnsupportedChat(chat) {
   if (!chat) return true;
   const jid = typeof chat === "string" ? chat : (chat.id || chat.chatId || "");
-  return jidIsUnsupported(typeof jid === "string" ? jid : jid?._serialized || "");
+  return jidIsUnsupported(typeof jid === "string" ? jid : "");
 }
 
 function previewFor(message) {
@@ -70,7 +99,14 @@ function extractContent(msg) {
   if (content.viewOnceMessage?.message) content = content.viewOnceMessage.message;
   if (content.viewOnceMessageV2?.message) content = content.viewOnceMessageV2.message;
   if (content.documentWithCaptionMessage?.message) content = content.documentWithCaptionMessage.message;
+  if (content.editedMessage?.message) content = content.editedMessage.message;
   return content;
+}
+
+// Corpo de uma edição vinda de messages.update (update.message =
+// { editedMessage: { message: ... } }). Cobre texto e captions de mídia.
+export function extractEditedBody(updateMessage) {
+  return bodyOf(extractContent({ message: updateMessage }));
 }
 
 function messageTypeOf(content) {
@@ -97,6 +133,22 @@ function bodyOf(content) {
     content.documentMessage?.caption ||
     ""
   );
+}
+
+// stanzaId da mensagem citada, presente no contextInfo de qualquer tipo de
+// conteúdo (não só texto — respostas com mídia também carregam a citação).
+function quotedIdOf(content) {
+  if (!content) return undefined;
+  const carriers = [
+    content.extendedTextMessage, content.imageMessage, content.videoMessage,
+    content.audioMessage, content.documentMessage, content.stickerMessage,
+    content.contactMessage, content.contactsArrayMessage,
+  ];
+  for (const c of carriers) {
+    const id = c?.contextInfo?.stanzaId;
+    if (id) return id;
+  }
+  return undefined;
 }
 
 function phoneFromVcard(vcard) {
@@ -194,7 +246,7 @@ export function mapMessage(msg, { instanceId, mediaUrl, mediaMime } = {}) {
     mediaUrl: mediaUrl || undefined,
     mediaMime: mediaMime || undefined,
     ack,
-    quotedMsgId: content?.extendedTextMessage?.contextInfo?.stanzaId || undefined,
+    quotedMsgId: quotedIdOf(content),
   };
 }
 
@@ -226,9 +278,10 @@ export function resolveContactInfo(jid, contact) {
 
 export function mapChatFromBaileys({ jid, chatEntry, contact, instanceId, lastMessage } = {}) {
   const { phoneNumber, pushname } = resolveContactInfo(jid, contact);
-  const jidDigits = jidUser(jid);
-  const fallbackName = chatEntry?.name || chatEntry?.subject || pushname || phoneNumber || jidDigits || "";
-  const whatsappName = pushname || fallbackName;
+  // Nome de exibição: apenas um nome REAL (pushname/contato). Nunca número cru
+  // nem JID/LID — quando não há nome, fica vazio e o telefone formatado é exibido.
+  const rawName = pushname || chatEntry?.name || chatEntry?.subject || "";
+  const whatsappName = isPlaceholderName(rawName) ? "" : rawName;
   const customer = whatsappName;
   const tsCandidates = [
     Number(lastMessage?.timestamp),

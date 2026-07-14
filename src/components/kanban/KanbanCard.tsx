@@ -8,7 +8,9 @@ import { ptBR } from "date-fns/locale";
 import { Appointment, useCRM } from "@/store/crm-store";
 import { cn } from "@/lib/utils";
 
-export function KanbanCard({ deal, onClick, draggable = true }: { deal: Deal; nextAppointment?: Appointment; onClick: () => void; draggable?: boolean }) {
+const initials = (name: string) => (name || "").trim().slice(0, 2).toUpperCase() || "?";
+
+export function KanbanCard({ deal, avatarUrl, onClick, draggable = true }: { deal: Deal; avatarUrl?: string; nextAppointment?: Appointment; onClick: () => void; draggable?: boolean }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: deal.id, disabled: !draggable });
   const { teamUsers, stages } = useCRM();
   const sellerIds = Array.from(new Set([deal.sellerId, ...(deal.assignedSellerIds || [])].filter(Boolean)));
@@ -28,7 +30,11 @@ export function KanbanCard({ deal, onClick, draggable = true }: { deal: Deal; ne
         isDragging ? "rotate-1 opacity-60 ring-2 ring-primary/30" : "",
       )}
     >
-      <div className="mb-2 flex items-start justify-between gap-2">
+      <div className="mb-2 flex items-start gap-2">
+        <Avatar className="h-9 w-9 shrink-0">
+          {avatarUrl && <AvatarImage src={avatarUrl} alt={deal.customer} />}
+          <AvatarFallback className="bg-gradient-primary text-[10px] font-semibold text-primary-foreground">{initials(deal.customer)}</AvatarFallback>
+        </Avatar>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">{deal.customer}</div>
           <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">

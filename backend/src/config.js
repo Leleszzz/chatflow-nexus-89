@@ -13,6 +13,10 @@ const DATA_DIR = path.resolve(BACKEND_ROOT, process.env.DATA_DIR || "./data");
 export const config = {
   port: Number(process.env.PORT) || 3001,
   corsOrigin: process.env.CORS_ORIGIN || "http://localhost:8080",
+  mongo: {
+    uri: process.env.MONGODB_URI || "mongodb://127.0.0.1:27017",
+    db: process.env.MONGODB_DB || "chatflow",
+  },
   paths: {
     backendRoot: BACKEND_ROOT,
     dataDir: DATA_DIR,
@@ -21,6 +25,7 @@ export const config = {
     settingsFile: path.join(DATA_DIR, "settings.json"),
     usersFile: path.join(DATA_DIR, "users.json"),
     prontuariosFile: path.join(DATA_DIR, "prontuarios.json"),
+    scheduledMessagesFile: path.join(DATA_DIR, "scheduled-messages.json"),
     agentUsageFile: path.join(DATA_DIR, "agent-usage.json"),
     usersSeedFile: path.resolve(BACKEND_ROOT, "..", "src", "banco-de-dados", "users.json"),
     messagesDir: path.join(DATA_DIR, "messages"),
