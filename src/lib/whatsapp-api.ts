@@ -56,6 +56,26 @@ export type WAMessage = {
   deleted?: boolean;
 };
 
+// Registro da lista de leads importada por TXT (NM_PSSA|NU_DOCUMENTO|NU_FONE_TERMINAL).
+export type LeadListEntry = {
+  phoneKey: string;
+  nome: string;
+  documento: string;
+  telefone: string;
+  importadoEm: string;
+  importadoPor?: string;
+};
+
+export type LeadListStats = { total: number; ultimaImportacao: string };
+
+export type LeadImportResult = LeadListStats & {
+  ok: true;
+  lidos: number;
+  inseridos: number;
+  atualizados: number;
+  ignorados: number;
+};
+
 export type ProntuarioCategory = "foto" | "video" | "audio" | "documento" | "outro";
 
 export type ProntuarioAttachment = {
@@ -278,6 +298,25 @@ export const whatsappApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  leadListStats: () => request<LeadListStats>("/api/leads/stats"),
+  lookupLead: (phone: string) =>
+    request<LeadListEntry | null>(`/api/leads/lookup?phone=${encodeURIComponent(phone)}`),
+  clearLeadList: () => request<{ ok: true; removidos: number }>("/api/leads", { method: "DELETE" }),
+  importLeadList: async (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    const headers: Record<string, string> = {};
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
+    const res = await fetch("/api/leads/import", { method: "POST", body: form, headers });
+    if (!res.ok) {
+      const text = await res.text();
+      let detail = text;
+      try { const p = JSON.parse(text); if (p?.error) detail = p.error; } catch { /* texto cru */ }
+      throw new Error(detail || `${res.status} ${res.statusText}`);
+    }
+    return res.json() as Promise<LeadImportResult>;
+  },
+
   uploadProntuario: async (dealId: string, name: string, file: File, uploadedBy?: string) => {
     const form = new FormData();
     form.append("dealId", dealId);

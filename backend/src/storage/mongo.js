@@ -47,6 +47,7 @@ export const collections = {
   users: "users",
   deals: "deals",
   stages: "stages",
+  leadList: "lead_list",
 };
 
 async function ensureIndexes() {

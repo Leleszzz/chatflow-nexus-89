@@ -18,8 +18,8 @@ import {
   DayOfWeek,
   LeadDistributionStrategy,
 } from "@/store/crm-store";
-import { whatsappApi } from "@/lib/whatsapp-api";
-import { Plus, Trash2, Pencil, KeyRound, Loader2 } from "lucide-react";
+import { whatsappApi, LeadListStats } from "@/lib/whatsapp-api";
+import { Plus, Trash2, Pencil, KeyRound, Loader2, Upload, FileText } from "lucide-react";
 import { toast } from "sonner";
 
 const ROLES = ["Administrador", "Vendedora", "Financeiro", "Somente leitura"];
@@ -88,12 +88,19 @@ export default function Configuracoes() {
   const [openaiSaving, setOpenaiSaving] = useState(false);
   const [openaiLoading, setOpenaiLoading] = useState(true);
 
+  const [leadStats, setLeadStats] = useState<LeadListStats>({ total: 0, ultimaImportacao: "" });
+  const [leadImporting, setLeadImporting] = useState(false);
+  const leadFileRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     let cancelled = false;
     whatsappApi.getOpenaiStatus()
       .then(status => { if (!cancelled) setOpenaiConfigured(status.configured); })
       .catch(() => {})
       .finally(() => { if (!cancelled) setOpenaiLoading(false); });
+    whatsappApi.leadListStats()
+      .then(stats => { if (!cancelled) setLeadStats(stats); })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
@@ -284,6 +291,34 @@ export default function Configuracoes() {
     }
   };
 
+  const handleImportLeads = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = ""; // permite reimportar o mesmo arquivo
+    if (!file) return;
+    setLeadImporting(true);
+    try {
+      const r = await whatsappApi.importLeadList(file);
+      setLeadStats({ total: r.total, ultimaImportacao: r.ultimaImportacao });
+      const ignorados = r.ignorados ? ` · ${r.ignorados} linha(s) ignorada(s)` : "";
+      toast.success(`${r.lidos} registro(s) lidos — ${r.inseridos} novo(s), ${r.atualizados} atualizado(s)${ignorados}`);
+    } catch (err) {
+      toast.error((err as Error).message || "Falha ao importar");
+    } finally {
+      setLeadImporting(false);
+    }
+  };
+
+  const handleClearLeads = async () => {
+    if (!window.confirm(`Apagar a lista importada (${leadStats.total} registro(s))? As observações somem das conversas.`)) return;
+    try {
+      await whatsappApi.clearLeadList();
+      setLeadStats({ total: 0, ultimaImportacao: "" });
+      toast.success("Lista removida");
+    } catch (err) {
+      toast.error((err as Error).message || "Falha ao remover");
+    }
+  };
+
   if (!hasPermission("Alterar configurações da empresa")) {
     return (
       <AppLayout title="Configurações" subtitle="Acesso restrito">
@@ -303,6 +338,7 @@ export default function Configuracoes() {
           <TabsTrigger value="users">Usuários</TabsTrigger>
           <TabsTrigger value="automation">Distribuição & Agente</TabsTrigger>
           <TabsTrigger value="openai">OpenAI</TabsTrigger>
+          <TabsTrigger value="leads">Lista de leads</TabsTrigger>
         </TabsList>
 
         <TabsContent value="account" className="card-elevated p-6 mt-4 max-w-2xl">
@@ -598,6 +634,72 @@ export default function Configuracoes() {
               </Button>
             )}
           </div>
+        </TabsContent>
+
+        <TabsContent value="leads" className="card-elevated p-6 mt-4 max-w-2xl space-y-4">
+          <div>
+            <h3 className="font-display font-bold">Lista de leads (TXT)</h3>
+            <p className="text-sm text-muted-foreground">
+              Importe o arquivo com os contatos que já chamaram ou vão chamar. Quando um número da lista abrir
+              uma conversa, os dados aparecem como observação no card do lead — sem alterar nenhuma informação existente.
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-border/60 bg-secondary/40 p-3 text-sm">
+            {leadStats.total > 0 ? (
+              <>
+                <span className="font-semibold text-success">{leadStats.total.toLocaleString("pt-BR")} registro(s) na lista</span>
+                {leadStats.ultimaImportacao && (
+                  <span className="text-muted-foreground">
+                    {" "}· última importação em {new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(leadStats.ultimaImportacao))}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="text-muted-foreground">Nenhuma lista importada ainda.</span>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-dashed border-border p-4">
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
+              <FileText className="h-3.5 w-3.5" /> Formato esperado
+            </div>
+            <pre className="overflow-x-auto rounded-lg bg-secondary/60 p-3 text-xs leading-relaxed">
+{`NM_PSSA|NU_DOCUMENTO|NU_FONE_TERMINAL
+VALDINETE SANTOS|34615783809|27997230505
+ANDRESSA PEREIRA SCHNEIDER|5845229758|27999060983`}
+            </pre>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Campos separados por <code>|</code>, com cabeçalho. O telefone pode vir com ou sem o DDI 55 — o
+              casamento com a conversa ignora o nono dígito, então números antigos também são encontrados.
+            </p>
+          </div>
+
+          <input
+            ref={leadFileRef}
+            type="file"
+            accept=".txt,.csv,text/plain"
+            className="hidden"
+            onChange={handleImportLeads}
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={() => leadFileRef.current?.click()}
+              disabled={leadImporting}
+              className="bg-gradient-primary gap-2"
+            >
+              {leadImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              {leadStats.total > 0 ? "Importar outro arquivo" : "Importar TXT"}
+            </Button>
+            {leadStats.total > 0 && (
+              <Button variant="outline" onClick={handleClearLeads} disabled={leadImporting} className="text-destructive hover:text-destructive">
+                Apagar lista
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Importar de novo <strong>soma</strong> à lista: números novos são adicionados e os já existentes são atualizados. Nada é apagado.
+          </p>
         </TabsContent>
       </Tabs>
 

@@ -14,13 +14,13 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ClientTemperatureBadge, ConversationStatus, StatusBadge, TagBadge } from "@/components/shared/Badges";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, Clock, Contact as ContactIcon, Copy, FileText, Film, FolderOpen, Image as ImageIcon, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
+import { Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, ClipboardList, Clock, Contact as ContactIcon, Copy, FileText, Film, FolderOpen, Image as ImageIcon, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
 import { useWhatsAppConversations, useWhatsAppMessages } from "@/hooks/useWhatsAppConversations";
-import { whatsappApi, ScheduledMessage, WAConversation, WAMessage, WhatsAppInstance } from "@/lib/whatsapp-api";
+import { whatsappApi, LeadListEntry, ScheduledMessage, WAConversation, WAMessage, WhatsAppInstance } from "@/lib/whatsapp-api";
 import { Label } from "@/components/ui/label";
 import { AudioMessage } from "@/components/chat/AudioMessage";
 import { ImageViewer } from "@/components/chat/ImageViewer";
@@ -54,6 +54,10 @@ type Conversation = {
 
 const safeStr = (v: unknown, fallback = "") => (typeof v === "string" && v.length > 0 ? v : fallback);
 const initials = (name: string) => (name || "").trim().slice(0, 2).toUpperCase() || "?";
+const formatCpf = (doc: string) => {
+  const d = (doc || "").replace(/\D/g, "");
+  return d.length === 11 ? d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4") : doc;
+};
 
 const toConversationFromDeal = (deal: Deal): Conversation => ({
   id: `deal-${deal.id}`,
@@ -263,6 +267,23 @@ export default function Conversas() {
   const selectedStatus = selected ? conversationStatus(selected) : null;
 
   const { messages: waMessages } = useWhatsAppMessages(isWaConversation ? selected?.id : null);
+
+  // Observações da lista de leads importada (Configurações > Lista de leads).
+  // Casa pelo telefone; se a conversa ainda não tem número (chat @lid), usa o
+  // próprio chatId, que só bate quando ele é um JID de número.
+  const [leadInfo, setLeadInfo] = useState<LeadListEntry | null>(null);
+  const leadLookupKey = selected?.phone || selected?.chatId || "";
+  useEffect(() => {
+    if (!leadLookupKey) {
+      setLeadInfo(null);
+      return;
+    }
+    let cancelled = false;
+    whatsappApi.lookupLead(leadLookupKey)
+      .then(hit => { if (!cancelled) setLeadInfo(hit); })
+      .catch(() => { if (!cancelled) setLeadInfo(null); });
+    return () => { cancelled = true; };
+  }, [leadLookupKey]);
 
   useEffect(() => {
     if (!initialDealId) return;
@@ -1029,6 +1050,26 @@ export default function Conversas() {
                   </PopoverContent>
                 </Popover>
               </div>
+
+              {leadInfo && (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border bg-warning-soft/60 px-4 py-2 text-xs">
+                  <span className="flex items-center gap-1.5 font-semibold text-warning">
+                    <ClipboardList className="h-3.5 w-3.5" /> Observações da lista
+                  </span>
+                  {leadInfo.nome && (
+                    <span>
+                      <span className="text-muted-foreground">Nome: </span>
+                      <span className="font-medium">{leadInfo.nome}</span>
+                    </span>
+                  )}
+                  {leadInfo.documento && (
+                    <span>
+                      <span className="text-muted-foreground">CPF: </span>
+                      <span className="font-mono font-medium">{formatCpf(leadInfo.documento)}</span>
+                    </span>
+                  )}
+                </div>
+              )}
 
               <div className="flex-1 space-y-3 overflow-y-auto p-6" ref={messagesContainerRef}>
                 {isWaConversation ? (
