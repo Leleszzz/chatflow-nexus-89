@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { useCRM, CrmPatch } from "@/store/crm-store";
@@ -164,6 +164,7 @@ export default function Conversas() {
   const [draftMessage, setDraftMessage] = useState("");
   const [sending, setSending] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const conversationListRef = useRef<HTMLDivElement>(null);
   const [selectionToolbar, setSelectionToolbar] = useState<{ top: number; left: number } | null>(null);
   const attachInputRef = useRef<HTMLInputElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -315,6 +316,16 @@ export default function Conversas() {
     if (conversation) setSelectedId(conversation.id);
   }, [conversations, initialDealId]);
 
+  // Fixa a seleção inicial assim que a lista carrega. Sem isto, `selectedId`
+  // fica indefinido e a conversa exibida seria SEMPRE o primeiro item da lista —
+  // que muda de lugar a cada mensagem recebida, trocando a conversa aberta
+  // sozinha (e apagando o rascunho que estivesse sendo digitado).
+  useEffect(() => {
+    if (!selectedId && visibleConversations.length) {
+      setSelectedId(visibleConversations[0].id);
+    }
+  }, [selectedId, visibleConversations]);
+
   useEffect(() => {
     setEditingName(false);
     setNameDraft(selected?.customer || "");
@@ -339,6 +350,29 @@ export default function Conversas() {
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [selected?.id, waMessages.length]);
+
+  // --- Rolagem da lista lateral ---
+  // Chegou mensagem: a conversa sobe para o topo, a lista se reordena e a
+  // rolagem era jogada de volta ao começo enquanto o usuário navegava mais
+  // abaixo. Guardamos a posição a cada rolagem e a devolvemos antes da tela
+  // pintar (useLayoutEffect, para não piscar).
+  const listScrollRef = useRef(0);
+
+  // Trocar filtro/busca/ordem gera OUTRA lista — aí sim o certo é voltar ao topo.
+  // Declarado antes do efeito de restauração para rodar primeiro e não brigar
+  // com ele no mesmo render.
+  useLayoutEffect(() => {
+    listScrollRef.current = 0;
+    if (conversationListRef.current) conversationListRef.current.scrollTop = 0;
+  }, [statusFilter, activeSearch, sortOrder]);
+
+  useLayoutEffect(() => {
+    const el = conversationListRef.current;
+    if (!el) return;
+    if (el.scrollTop !== listScrollRef.current) {
+      el.scrollTop = listScrollRef.current;
+    }
+  }, [visibleConversations]);
 
   const updateSelectedConversation = (patch: Partial<Conversation>) => {
     if (!selected) return;
@@ -982,7 +1016,11 @@ export default function Conversas() {
               ))}
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto scrollbar-thin">
+          <div
+            ref={conversationListRef}
+            onScroll={event => { listScrollRef.current = event.currentTarget.scrollTop; }}
+            className="flex-1 overflow-y-auto scrollbar-thin"
+          >
             {visibleConversations.map(conversation => {
               const responsible = sellerOptions.find(user => user.id === conversation.sellerId);
               return (
