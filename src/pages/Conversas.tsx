@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ClientTemperatureBadge, ConversationStatus, StatusBadge, TagBadge } from "@/components/shared/Badges";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, ClipboardList, Clock, Contact as ContactIcon, Copy, FileText, Film, FolderOpen, Image as ImageIcon, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, MessageSquareText, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowUpNarrowWide, Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, ClipboardList, Clock, Contact as ContactIcon, Copy, FileText, Film, FolderOpen, Image as ImageIcon, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, MessageSquareText, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -154,6 +154,8 @@ export default function Conversas() {
   const statusQuery = searchParams.get("status") || "todas";
   const [conversationSearch, setConversationSearch] = useState(query);
   const [statusFilter, setStatusFilter] = useState(statusQuery);
+  // "recentes" = última interação mais nova primeiro (padrão, como no WhatsApp).
+  const [sortOrder, setSortOrder] = useState<"recentes" | "antigas">("recentes");
   const [newTag, setNewTag] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -263,7 +265,12 @@ export default function Conversas() {
       // indefinido e não deve entrar aqui.
       if (statusFilter === "cliente-por-ultimo") return conversation.lastMessageFromMe === false;
       return status === statusFilter;
-    });
+    })
+    // Ordena só a lista exibida — `conversations` continua na ordem padrão, para
+    // a conversa selecionada não pular ao inverter a ordenação.
+    .sort((a, b) => (sortOrder === "recentes"
+      ? tsValue(b.lastInteraction) - tsValue(a.lastInteraction)
+      : tsValue(a.lastInteraction) - tsValue(b.lastInteraction)));
   const selected = conversations.find(conversation => conversation.id === selectedId) || visibleConversations[0];
   const selectedDeal = selected?.dealId ? deals.find(deal => deal.id === selected.dealId) : null;
   const isWaConversation = Boolean(selected?.instanceId && selected?.chatId);
@@ -945,6 +952,16 @@ export default function Conversas() {
                   className="border-transparent bg-secondary pl-9"
                 />
               </div>
+              <Button
+                variant="outline"
+                size="icon"
+                title={sortOrder === "recentes" ? "Ordem: mais recentes primeiro (clique para inverter)" : "Ordem: mais antigas primeiro (clique para inverter)"}
+                onClick={() => setSortOrder(cur => (cur === "recentes" ? "antigas" : "recentes"))}
+              >
+                {sortOrder === "recentes"
+                  ? <ArrowDownWideNarrow className="h-4 w-4" />
+                  : <ArrowUpNarrowWide className="h-4 w-4 text-primary" />}
+              </Button>
               <Button variant="outline" size="icon" title="Iniciar conversa" onClick={openNewConversationDialog}>
                 <MessageCirclePlus className="h-4 w-4" />
               </Button>
