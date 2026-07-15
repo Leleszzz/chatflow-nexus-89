@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { useCRM, CrmPatch } from "@/store/crm-store";
@@ -142,6 +142,23 @@ const statusFilters = [
 const formatTime = (iso: string) => {
   const d = new Date(iso);
   return new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(d);
+};
+
+// Rótulo do separador de dia dentro do chat: "Hoje", "Ontem", ou a data.
+// Datas do mesmo ano omitem o ano; anos anteriores mostram por extenso.
+const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+const formatDaySeparator = (d: Date) => {
+  const hoje = new Date();
+  const ontem = new Date();
+  ontem.setDate(hoje.getDate() - 1);
+  if (dayKey(d) === dayKey(hoje)) return "Hoje";
+  if (dayKey(d) === dayKey(ontem)) return "Ontem";
+  return new Intl.DateTimeFormat("pt-BR", {
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+    ...(d.getFullYear() !== hoje.getFullYear() ? { year: "numeric" } : {}),
+  }).format(d);
 };
 
 export default function Conversas() {
@@ -1229,8 +1246,23 @@ export default function Conversas() {
                       Nenhuma mensagem ainda nesta conversa.
                     </div>
                   ) : (
-                    waMessages.map(message => (
-                      <div key={message.id} className={cn("flex", message.fromMe ? "justify-end" : "justify-start")}>
+                    waMessages.map((message, index) => {
+                      // Separador quando vira o dia (mensagens já vêm em ordem
+                      // cronológica). Também no primeiro item, para sempre haver
+                      // uma referência de data no topo do histórico visível.
+                      const dia = new Date(message.timestamp * 1000);
+                      const anterior = index > 0 ? new Date(waMessages[index - 1].timestamp * 1000) : null;
+                      const mostrarSeparador = !anterior || dayKey(dia) !== dayKey(anterior);
+                      return (
+                      <Fragment key={message.id}>
+                        {mostrarSeparador && (
+                          <div className="sticky top-1 z-10 flex justify-center py-1">
+                            <span className="rounded-full bg-secondary/90 px-3 py-1 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur">
+                              {formatDaySeparator(dia)}
+                            </span>
+                          </div>
+                        )}
+                      <div className={cn("flex", message.fromMe ? "justify-end" : "justify-start")}>
                         <div className={cn("max-w-[70%] rounded-2xl px-4 py-2 text-sm shadow-sm",
                           message.fromMe ? "rounded-br-sm bg-primary text-primary-foreground" : "rounded-bl-sm bg-card")}>
                           {message.deleted && (
@@ -1336,7 +1368,9 @@ export default function Conversas() {
                           </div>
                         </div>
                       </div>
-                    ))
+                      </Fragment>
+                      );
+                    })
                   )
                 ) : (
                   <div className="mx-auto flex max-w-md items-center gap-2 rounded-xl bg-info-soft p-3 text-xs text-info">
