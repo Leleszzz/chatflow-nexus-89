@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ClientTemperatureBadge, ConversationStatus, StatusBadge, TagBadge } from "@/components/shared/Badges";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { ArrowDownWideNarrow, ArrowUpNarrowWide, Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, ClipboardList, Clock, Contact as ContactIcon, Copy, FileText, Film, FolderOpen, Image as ImageIcon, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, MessageSquareText, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowUpNarrowWide, Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, ClipboardList, Clock, Contact as ContactIcon, Copy, FileText, Film, Filter, FolderOpen, Image as ImageIcon, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, MessageSquareText, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -156,6 +156,9 @@ export default function Conversas() {
   const [statusFilter, setStatusFilter] = useState(statusQuery);
   // "recentes" = última interação mais nova primeiro (padrão, como no WhatsApp).
   const [sortOrder, setSortOrder] = useState<"recentes" | "antigas">("recentes");
+  // Filtro por etapa do funil (múltipla escolha). Vazio = todas as etapas.
+  const [stageFilter, setStageFilter] = useState<Set<string>>(new Set());
+  const [stageFilterOpen, setStageFilterOpen] = useState(false);
   const [newTag, setNewTag] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -267,6 +270,9 @@ export default function Conversas() {
       if (statusFilter === "cliente-por-ultimo") return conversation.lastMessageFromMe === false;
       return status === statusFilter;
     })
+    // Etapa do funil (múltipla): vazio = todas. Conversa sem etapa cai fora
+    // quando há filtro ativo (não pertence a nenhuma etapa selecionada).
+    .filter(conversation => stageFilter.size === 0 || (conversation.stage ? stageFilter.has(conversation.stage) : false))
     // Ordena só a lista exibida — `conversations` continua na ordem padrão, para
     // a conversa selecionada não pular ao inverter a ordenação.
     .sort((a, b) => (sortOrder === "recentes"
@@ -364,7 +370,7 @@ export default function Conversas() {
   useLayoutEffect(() => {
     listScrollRef.current = 0;
     if (conversationListRef.current) conversationListRef.current.scrollTop = 0;
-  }, [statusFilter, activeSearch, sortOrder]);
+  }, [statusFilter, activeSearch, sortOrder, stageFilter]);
 
   useLayoutEffect(() => {
     const el = conversationListRef.current;
@@ -996,6 +1002,56 @@ export default function Conversas() {
                   ? <ArrowDownWideNarrow className="h-4 w-4" />
                   : <ArrowUpNarrowWide className="h-4 w-4 text-primary" />}
               </Button>
+              <Popover open={stageFilterOpen} onOpenChange={setStageFilterOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    title="Filtrar por etapa do funil"
+                    className={cn("relative", stageFilter.size > 0 && "border-primary text-primary")}
+                  >
+                    <Filter className="h-4 w-4" />
+                    {stageFilter.size > 0 && (
+                      <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                        {stageFilter.size}
+                      </span>
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-60 p-2">
+                  <div className="mb-1 flex items-center justify-between px-1">
+                    <span className="text-xs font-semibold uppercase text-muted-foreground">Etapas do funil</span>
+                    {stageFilter.size > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setStageFilter(new Set())}
+                        className="text-[11px] font-medium text-primary hover:underline"
+                      >
+                        Limpar
+                      </button>
+                    )}
+                  </div>
+                  <div className="max-h-72 space-y-0.5 overflow-y-auto">
+                    {stages.map(stage => (
+                      <label
+                        key={stage.id}
+                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-secondary"
+                      >
+                        <Checkbox
+                          checked={stageFilter.has(stage.id)}
+                          onCheckedChange={() => setStageFilter(cur => {
+                            const next = new Set(cur);
+                            if (next.has(stage.id)) next.delete(stage.id);
+                            else next.add(stage.id);
+                            return next;
+                          })}
+                        />
+                        <span className="truncate">{stage.title}</span>
+                      </label>
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
               <Button variant="outline" size="icon" title="Iniciar conversa" onClick={openNewConversationDialog}>
                 <MessageCirclePlus className="h-4 w-4" />
               </Button>
