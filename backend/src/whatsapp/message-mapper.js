@@ -79,7 +79,7 @@ function previewFor(message) {
   }
 }
 
-function extractContent(msg) {
+export function extractContent(msg) {
   let content = msg?.message || {};
   if (content.ephemeralMessage?.message) content = content.ephemeralMessage.message;
   if (content.viewOnceMessage?.message) content = content.viewOnceMessage.message;

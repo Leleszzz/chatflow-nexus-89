@@ -92,11 +92,14 @@ conversationsRouter.post("/start", async (req, res) => {
     lastInteraction: prior?.lastInteraction || now,
     unread: prior?.unread || false,
     unreadCount: prior?.unreadCount || 0,
-    avatarUrl: prior?.avatarUrl,
+    ...(prior?.avatarUrl ? { avatarUrl: prior.avatarUrl } : {}),
     lastMessageId: prior?.lastMessageId,
     lastMessageFromMe: prior?.lastMessageFromMe,
     lastMessageAck: prior?.lastMessageAck,
   });
+
+  // Sem isto a conversa só ganharia foto quando chegasse a primeira mensagem.
+  if (!conversation.avatarUrl) client?.enqueueAvatar?.(chatId, id);
 
   const io = req.app.get("io");
   if (io) io.to(`instance:${instanceId}`).emit("conversation:update", { conversation });

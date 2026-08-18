@@ -35,7 +35,9 @@ export function useWhatsAppConversations() {
         const idx = curr.findIndex(c => c.id === payload.conversation.id);
         if (idx === -1) return [payload.conversation, ...curr];
         const next = curr.slice();
-        next[idx] = payload.conversation;
+        // Mescla em vez de substituir: um payload sem avatarUrl apagava a foto
+        // do contato da lista até o próximo refresh.
+        next[idx] = { ...next[idx], ...payload.conversation };
         return next;
       });
     };

@@ -17,13 +17,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Stage } from "@/lib/mock-data";
-import { KANBAN_COLORS } from "@/lib/kanban-colors";
-import { cn } from "@/lib/utils";
+import { StageColorPicker } from "./StageColorPicker";
 
-const COLOR_GROUPS = [
-  { id: "tema" as const, label: "Tema" },
-  { id: "paleta" as const, label: "Cores" },
-].map(group => ({ ...group, colors: KANBAN_COLORS.filter(color => color.group === group.id) }));
+const DEFAULT_NEW_STAGE_COLOR = "bg-primary";
 
 function SortableStageItem({
   stage,
@@ -48,7 +44,7 @@ function SortableStageItem({
       style={style}
       className={`rounded-lg border border-border/70 bg-card p-3 shadow-sm ${isDragging ? "z-10 opacity-70 shadow-lg" : ""}`}
     >
-      <div className="grid gap-2 sm:grid-cols-[auto_1fr_auto] sm:items-center">
+      <div className="grid gap-2 sm:grid-cols-[auto_1fr_auto_auto] sm:items-center">
         <button
           type="button"
           className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground cursor-grab active:cursor-grabbing"
@@ -66,33 +62,13 @@ function SortableStageItem({
           className="h-9 bg-background"
         />
         <div className="flex justify-end">
+          <StageColorPicker value={stage.color} onChange={onColor} />
+        </div>
+        <div className="flex justify-end">
           <Button type="button" size="icon" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={onRemove} title="Remover etapa">
             <Trash2 className="h-4 w-4" />
           </Button>
         </div>
-      </div>
-      <div className="mt-2 space-y-1.5 sm:pl-11">
-        <span className="text-[11px] text-muted-foreground">Cor da coluna:</span>
-        {COLOR_GROUPS.map(group => (
-          <div key={group.id} className="flex flex-wrap items-center gap-1.5">
-            <span className="w-12 shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">{group.label}</span>
-            {group.colors.map(color => (
-              <button
-                key={color.value}
-                type="button"
-                title={color.label}
-                aria-label={`Cor ${color.label}`}
-                aria-pressed={stage.color === color.value}
-                onClick={() => onColor(color.value)}
-                className={cn(
-                  "h-5 w-5 rounded-full transition",
-                  color.swatch,
-                  stage.color === color.value ? "ring-2 ring-offset-1 ring-foreground" : "opacity-70 hover:opacity-100",
-                )}
-              />
-            ))}
-          </div>
-        ))}
       </div>
     </div>
   );
@@ -102,13 +78,15 @@ export function StageManagerDialog({ open, onOpenChange }: { open: boolean; onOp
   const { stages, deals, addStage, updateStage, reorderStage, removeStage } = useCRM();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const [newTitle, setNewTitle] = useState("");
+  const [newColor, setNewColor] = useState(DEFAULT_NEW_STAGE_COLOR);
 
   const handleAdd = () => {
     const title = newTitle.trim();
     if (!title) return;
 
-    addStage(title);
+    addStage(title, newColor);
     setNewTitle("");
+    setNewColor(DEFAULT_NEW_STAGE_COLOR);
     toast.success("Etapa adicionada");
   };
 
@@ -145,7 +123,7 @@ export function StageManagerDialog({ open, onOpenChange }: { open: boolean; onOp
         </DialogHeader>
 
         <div className="space-y-3">
-          <div className="grid gap-2 rounded-lg border border-border/70 bg-secondary/40 p-3 sm:grid-cols-[1fr_auto] sm:items-end">
+          <div className="grid gap-2 rounded-lg border border-border/70 bg-secondary/40 p-3 sm:grid-cols-[1fr_auto_auto] sm:items-end">
             <div>
               <Label htmlFor="stage-title">Nova etapa</Label>
               <Input
@@ -157,6 +135,9 @@ export function StageManagerDialog({ open, onOpenChange }: { open: boolean; onOp
                 }}
                 placeholder="Ex: Follow-up"
               />
+            </div>
+            <div className="flex h-10 items-center">
+              <StageColorPicker value={newColor} onChange={setNewColor} />
             </div>
             <Button type="button" className="gap-2" onClick={handleAdd}>
               <Plus className="h-4 w-4" /> Adicionar

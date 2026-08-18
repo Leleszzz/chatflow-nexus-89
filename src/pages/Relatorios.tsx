@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { useCRM } from "@/store/crm-store";
-import { csvNumber, downloadCsv } from "@/lib/csv";
+import { CellValue, downloadXlsx } from "@/lib/xlsx";
 import { ClientTemperatureBadge, TagBadge } from "@/components/shared/Badges";
 import { Download, Play, FileText, Users, Bot, Flame, AlertTriangle, History, ShoppingBag, X } from "lucide-react";
 import { toast } from "sonner";
@@ -143,13 +143,13 @@ export default function Relatorios() {
   const refusalSelectOptions = refusalReasonsFromData.map(([reason]) => reason);
 
   // Cada relatório exporta as colunas do que está na tela. Antes, todos os 8
-  // tipos emitiam as mesmas colunas de lead — em "por vendedora"/"por agente" o
-  // CSV saía com dados diferentes dos que o usuário estava vendo.
-  const buildCsv = (): { header: string[]; rows: Array<Array<string | number>> } | null => {
+  // tipos emitiam as mesmas colunas de lead — em "por vendedora"/"por agente" a
+  // planilha saía com dados diferentes dos que o usuário estava vendo.
+  const buildSheet = (): { header: string[]; rows: CellValue[][] } | null => {
     if (selected === "vendedoras") {
       return {
         header: ["Vendedora", "Atendimentos", "Vendas", "Conversão (%)", "Valor total (R$)"],
-        rows: sellerPerformance.map(s => [s.name, s.atendimentos, s.vendas, csvNumber(Number(s.conversao), 1), csvNumber(s.valor)]),
+        rows: sellerPerformance.map(s => [s.name, s.atendimentos, s.vendas, Number(s.conversao), s.valor]),
       };
     }
 
@@ -172,14 +172,15 @@ export default function Relatorios() {
     const rows = reportRows.map(deal => {
       const sellerName = teamUsers.find(s => s.id === deal.sellerId)?.name || "";
       const stageName = stages.find(s => s.id === deal.stage)?.title || "";
-      const row: Array<string | number> = [
-        format(new Date(deal.lastInteraction), "dd/MM/yyyy HH:mm"),
+      // Data e valor vão CRUS: a célula é tipada, quem formata é o Excel.
+      const row: CellValue[] = [
+        new Date(deal.lastInteraction),
         deal.customer,
         deal.phone,
         sellerName,
         stageName,
         TEMPERATURE_LABELS[deal.temperature] || deal.temperature,
-        csvNumber(deal.estimatedValue || 0),
+        deal.estimatedValue || 0,
         deal.tags.join(" | "),
       ];
       if (isRefusalReport) row.splice(5, 0, getRefusalReason(deal));
@@ -189,13 +190,13 @@ export default function Relatorios() {
     return { header, rows };
   };
 
-  const exportCsv = () => {
+  const exportXlsx = async () => {
     if (!hasPermission("Exportar dados")) {
       toast.error("Seu usuário não tem permissão para exportar dados");
       return;
     }
 
-    const report = buildCsv();
+    const report = buildSheet();
     if (!report) {
       toast.error("O histórico de movimentações do Kanban ainda não é registrado, então não há o que exportar neste relatório");
       return;
@@ -207,7 +208,12 @@ export default function Relatorios() {
 
     const reportName = REPORTS.find(r => r.id === selected)?.name || selected;
     const stamp = format(new Date(), "yyyy-MM-dd");
-    downloadCsv(`relatorio-${selected}-${stamp}.csv`, [report.header, ...report.rows]);
+    try {
+      await downloadXlsx(`relatorio-${selected}-${stamp}.xlsx`, report.header, report.rows);
+    } catch (err) {
+      toast.error(`Falha ao gerar a planilha: ${err instanceof Error ? err.message : "erro"}`);
+      return;
+    }
     toast.success(`${reportName}: ${report.rows.length} ${report.rows.length === 1 ? "linha exportada" : "linhas exportadas"}`);
   };
 
@@ -300,11 +306,11 @@ export default function Relatorios() {
             <Button variant="outline" className="gap-2" onClick={() => toast.success(`${reportRows.length} registros carregados`)}><Play className="w-4 h-4" /> Gerar</Button>
             <Button
               className="gap-2 bg-gradient-primary"
-              onClick={exportCsv}
+              onClick={exportXlsx}
               disabled={selected === "kanban"}
-              title={selected === "kanban" ? "O histórico de movimentações do Kanban ainda não é registrado" : "Exportar CSV"}
+              title={selected === "kanban" ? "O histórico de movimentações do Kanban ainda não é registrado" : "Exportar Excel"}
             >
-              <Download className="w-4 h-4" /> Exportar CSV
+              <Download className="w-4 h-4" /> Exportar Excel
             </Button>
           </div>
         </div>

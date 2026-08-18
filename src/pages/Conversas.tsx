@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ClientTemperatureBadge, ConversationStatus, StatusBadge, TagBadge } from "@/components/shared/Badges";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { Archive, ArchiveRestore, ArrowDownWideNarrow, ArrowUpNarrowWide, Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, ClipboardList, Clock, Contact as ContactIcon, Copy, FileText, Film, Filter, FolderOpen, Image as ImageIcon, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, MessageSquareText, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, SlidersHorizontal, Smartphone, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDownWideNarrow, ArrowUpNarrowWide, Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, ClipboardList, Clock, Contact as ContactIcon, Copy, FileText, Film, Filter, FolderOpen, Image as ImageIcon, ImageOff, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, MessageSquareText, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, SlidersHorizontal, Smartphone, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -54,6 +54,19 @@ type Conversation = {
 };
 
 const safeStr = (v: unknown, fallback = "") => (typeof v === "string" && v.length > 0 ? v : fallback);
+
+// Tipos cuja mensagem é o próprio arquivo: sem mediaUrl o balão ficaria VAZIO,
+// só com o horário. Espelha o previewFor do backend (message-mapper.js).
+const MEDIA_PLACEHOLDERS: Record<string, string> = {
+  image: "[imagem]",
+  sticker: "[figurinha]",
+  audio: "[áudio]",
+  ptt: "[áudio]",
+  video: "[vídeo]",
+  document: "[documento]",
+};
+const mediaPlaceholder = (type: string, isGif?: boolean) =>
+  type === "video" && isGif ? "[GIF]" : MEDIA_PLACEHOLDERS[type];
 const initials = (name: string) => (name || "").trim().slice(0, 2).toUpperCase() || "?";
 const formatCpf = (doc: string) => {
   const d = (doc || "").replace(/\D/g, "");
@@ -227,6 +240,9 @@ export default function Conversas() {
   const recordingStartRef = useRef<number>(0);
   const recordingTimerRef = useRef<number | null>(null);
   const [viewer, setViewer] = useState<{ src: string; kind: "image" | "video" } | null>(null);
+  // Mídia cujo arquivo sumiu do disco: o <img> dispara onError e caímos no
+  // mesmo placeholder de quando o download nunca aconteceu.
+  const [brokenMedia, setBrokenMedia] = useState<Set<string>>(new Set());
   const [attachKind, setAttachKind] = useState<"image" | "video" | "audio" | "document">("image");
   const [attachOpen, setAttachOpen] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -1433,6 +1449,11 @@ export default function Conversas() {
                       const dia = new Date(message.timestamp * 1000);
                       const anterior = index > 0 ? new Date(waMessages[index - 1].timestamp * 1000) : null;
                       const mostrarSeparador = !anterior || dayKey(dia) !== dayKey(anterior);
+                      // temMidia trata "arquivo sumiu do disco" igual a "nunca baixou",
+                      // para nunca sobrar um balão vazio nem um ícone quebrado.
+                      const temMidia = Boolean(message.mediaUrl) && !brokenMedia.has(message.id);
+                      const placeholderMidia = mediaPlaceholder(message.type, message.isGif);
+                      const exibeFigurinha = !message.deleted && message.type === "sticker" && temMidia;
                       return (
                       <Fragment key={message.id}>
                         {mostrarSeparador && (
@@ -1443,8 +1464,12 @@ export default function Conversas() {
                           </div>
                         )}
                       <div className={cn("flex", message.fromMe ? "justify-end" : "justify-start")}>
-                        <div className={cn("max-w-[70%] rounded-2xl px-4 py-2 text-sm shadow-sm",
-                          message.fromMe ? "rounded-br-sm bg-primary text-primary-foreground" : "rounded-bl-sm bg-card")}>
+                        <div className={cn("max-w-[70%] rounded-2xl text-sm",
+                          // Figurinha vai SEM balão, como no WhatsApp: o fundo
+                          // violeta/branco do balão arruína o alfa da figurinha.
+                          exibeFigurinha
+                            ? "bg-transparent p-0 shadow-none"
+                            : cn("px-4 py-2 shadow-sm", message.fromMe ? "rounded-br-sm bg-primary text-primary-foreground" : "rounded-bl-sm bg-card"))}>
                           {message.deleted && (
                             <div className="text-xs italic opacity-70">🚫 Mensagem apagada</div>
                           )}
@@ -1482,20 +1507,32 @@ export default function Conversas() {
                               </Button>
                             </div>
                           ))}
-                          {!message.deleted && message.mediaUrl && (message.type === "image" || message.type === "sticker") && (
+                          {!message.deleted && temMidia && (message.type === "image" || message.type === "sticker") && (
                             <button
                               type="button"
                               onClick={() => setViewer({ src: message.mediaUrl!, kind: "image" })}
                               className="mb-1 block overflow-hidden rounded-lg transition hover:opacity-90"
                               title="Clique para expandir"
                             >
-                              <img src={message.mediaUrl} alt="" className={cn("rounded-lg", message.type === "sticker" ? "max-h-40" : "max-h-72")} />
+                              <img
+                                src={message.mediaUrl}
+                                alt=""
+                                onError={() => setBrokenMedia(prev => new Set(prev).add(message.id))}
+                                className={cn("rounded-lg", message.type === "sticker" ? "max-h-40" : "max-h-72")}
+                              />
                             </button>
                           )}
-                          {!message.deleted && message.mediaUrl && (message.type === "audio" || message.type === "ptt") && (
+                          {!message.deleted && !temMidia && placeholderMidia && (
+                            <div className={cn("mb-1 flex items-center gap-1.5 text-xs italic",
+                              message.fromMe ? "text-primary-foreground/70" : "text-muted-foreground")}>
+                              <ImageOff className="h-3.5 w-3.5 shrink-0" />
+                              <span>{placeholderMidia} não foi baixada</span>
+                            </div>
+                          )}
+                          {!message.deleted && temMidia && (message.type === "audio" || message.type === "ptt") && (
                             <div className="mb-1"><AudioMessage src={message.mediaUrl} mine={message.fromMe} /></div>
                           )}
-                          {!message.deleted && message.mediaUrl && message.type === "video" && (
+                          {!message.deleted && temMidia && message.type === "video" && (
                             message.isGif ? (
                               <video src={message.mediaUrl} className="mb-1 max-h-72 rounded-lg" autoPlay loop muted playsInline />
                             ) : (
@@ -1514,17 +1551,17 @@ export default function Conversas() {
                               </button>
                             )
                           )}
-                          {!message.deleted && message.mediaUrl && message.type === "document" && (
+                          {!message.deleted && temMidia && message.type === "document" && (
                             <a href={message.mediaUrl} target="_blank" rel="noreferrer" className="mb-1 block text-xs underline">Abrir documento</a>
                           )}
                           {!message.deleted && message.body && message.type !== "contact" && <div className="whitespace-pre-wrap break-words">{message.body}</div>}
-                          {!message.deleted && message.mediaUrl && (
+                          {!message.deleted && temMidia && (
                             <button
                               type="button"
                               onClick={() => openProntuarioLink(message)}
                               className={cn(
                                 "mt-1 flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition",
-                                message.fromMe
+                                message.fromMe && !exibeFigurinha
                                   ? "bg-primary-foreground/15 text-primary-foreground hover:bg-primary-foreground/25"
                                   : "bg-secondary text-foreground hover:bg-secondary/80",
                               )}
@@ -1533,7 +1570,9 @@ export default function Conversas() {
                               <FolderOpen className="h-3 w-3" /> Vincular ao prontuário
                             </button>
                           )}
-                          <div className={cn("mt-1 flex items-center justify-end gap-1 text-[10px]", message.fromMe ? "text-primary-foreground/70" : "text-muted-foreground")}>
+                          <div className={cn("mt-1 flex items-center justify-end gap-1 text-[10px]",
+                            // Sem balão, o branco do texto sumiria no fundo claro.
+                            message.fromMe && !exibeFigurinha ? "text-primary-foreground/70" : "text-muted-foreground")}>
                             {message.edited && !message.deleted && <span className="italic">(editada)</span>}
                             <span>{formatTime(new Date(message.timestamp * 1000).toISOString())}</span>
                             {message.fromMe && (

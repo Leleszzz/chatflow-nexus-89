@@ -13,7 +13,7 @@ import makeWASocket, {
 import { config } from "../../config.js";
 import { patchInstance, getInstance } from "../../storage/instances-repo.js";
 import { listMessages, updateMessageMedia, updateMessageAck, markMessageDeleted, updateMessageBody } from "../../storage/messages-repo.js";
-import { getConversation, upsertConversation, mergeConversations, repairMissingPhones } from "../../storage/conversations-repo.js";
+import { getConversation, upsertConversation, mergeConversations, repairMissingPhones, listConversationsMissingAvatar } from "../../storage/conversations-repo.js";
 import { downloadAndSaveFromUrl } from "../../storage/media-repo.js";
 import { buildConversationId, jidIsUnsupported, mapBaileysStatusToAck, bestName, extractEditedBody, previewFor } from "../message-mapper.js";
 import { emitToInstance } from "../../socket/events.js";
@@ -28,6 +28,16 @@ import { metrics } from "../../observability/instance-metrics.js";
 
 suppressLibsignalSessionLogs();
 const logger = pino({ level: process.env.BAILEYS_LOG_LEVEL || "fatal" });
+
+// Um job de mídia/avatar que falha por motivo transitório (socket subindo,
+// rate limit, rede) é retentado com backoff. Sem isso a mensagem ficava sem
+// arquivo para sempre — a mensagem bruta do Baileys não é persistida, então
+// não há como reprocessá-la depois.
+const MEDIA_RETRY_MAX = 3;
+const MEDIA_RETRY_BASE_MS = 5000;
+// Teto de conversas cujo avatar é reenfileirado ao reconectar, para um
+// pareamento novo não inundar a fila.
+const AVATAR_BACKFILL_LIMIT = 500;
 
 // Conexão WhatsApp de UMA instância. Máquina de estados encapsulada, com
 // teardown explícito (off de todos os listeners + limpeza dos Maps). NÃO decide
@@ -47,7 +57,10 @@ export class WhatsAppConnection extends EventEmitter {
     this._listeners = [];
     this.chatsById = new Map();
     this.contactsByJid = new Map();
-    this._avatarDone = new Set();
+    // Dedupe de jobs de avatar concorrentes para a mesma conversa. NÃO é marca
+    // de "já tentou": quem evita o retrabalho é o `avatarUrl` já gravado.
+    this._avatarInFlight = new Set();
+    this._retryTimers = new Set();
     this.ownJid = null;
     this.lastQrDataUrl = null;
     this.lastPairingCode = null;
@@ -257,6 +270,16 @@ export class WhatsAppConnection extends EventEmitter {
       if (c?.id) {
         const cid = this.resolver.canonical(c.id);
         this.contactsByJid.set(cid, { ...(this.contactsByJid.get(cid) || {}), ...c, id: cid });
+        // O Baileys sinaliza troca de foto com imgUrl "changed" (ou uma URL nova).
+        // Sem reagir a isso o avatar ficava congelado para sempre.
+        if ("imgUrl" in c && c.imgUrl && !jidIsUnsupported(cid)) {
+          this.mediaQueue.enqueue({
+            kind: "avatar",
+            jid: cid,
+            conversationId: buildConversationId(this.instanceId, cid),
+            force: true,
+          });
+        }
       }
     }
     // O contato pode chegar DEPOIS da conversa ter sido criada pelo histórico:
@@ -305,6 +328,7 @@ export class WhatsAppConnection extends EventEmitter {
         this._emitIo("instance:status", { instanceId: this.instanceId, status: "ativa", phone: phoneFmt });
         console.log(`[${this.instanceId}] conexão aberta, phone=${phoneFmt}${isFreshPair ? " (pareamento novo)" : ""}`);
         this._repairPhones().catch(() => {});
+        this._backfillAvatars().catch(err => console.warn(`[${this.instanceId}] backfill de avatar falhou: ${err.message}`));
         this.emit("open", { phone: phoneFmt, isFreshPair });
       } catch (err) {
         console.error(`[${this.instanceId}] open handler falhou:`, err.message);
@@ -506,25 +530,65 @@ export class WhatsAppConnection extends EventEmitter {
     this._emitIo("conversation:update", { conversation: updated });
   }
 
+  // Reenfileira um job que falhou por motivo transitório, com backoff linear.
+  // O timer é rastreado para o teardown não deixar disparo órfão.
+  _retryLater(job, attempts) {
+    const timer = setTimeout(() => {
+      this._retryTimers.delete(timer);
+      if (!this.sock) return; // conexão caiu no meio do caminho
+      this.mediaQueue.enqueue({ ...job, attempts });
+    }, MEDIA_RETRY_BASE_MS * attempts);
+    if (typeof timer.unref === "function") timer.unref();
+    this._retryTimers.add(timer);
+  }
+
   async _processMediaJob(job) {
     if (job.kind === "media") {
       const info = await downloadIfMedia(job.msg, this.sock);
       metrics.set(this.instanceId, "mediaQueueDepth", this.mediaQueue.depth);
-      if (!info.mediaUrl) { metrics.inc(this.instanceId, "mediaFailed"); return; }
+      if (!info.mediaUrl) {
+        metrics.inc(this.instanceId, "mediaFailed");
+        const attempts = (job.attempts || 0) + 1;
+        if (attempts <= MEDIA_RETRY_MAX) this._retryLater(job, attempts);
+        return;
+      }
       await updateMessageMedia(this.instanceId, job.jid, job.messageId, info);
       this._emitIo("message:media", { messageId: job.messageId, chatId: job.jid, mediaUrl: info.mediaUrl, mediaMime: info.mediaMime });
     } else if (job.kind === "avatar") {
-      if (this._avatarDone.has(job.conversationId)) return;
-      this._avatarDone.add(job.conversationId);
-      const url = await this.getProfilePicUrl(job.jid);
-      if (!url) return;
-      const saved = await downloadAndSaveFromUrl(url);
-      if (!saved) return;
-      const prior = await getConversation(job.conversationId);
-      if (!prior) return;
-      const updated = await upsertConversation({ id: job.conversationId, avatarUrl: saved.url });
-      this._emitIo("conversation:update", { conversation: updated });
+      if (this._avatarInFlight.has(job.conversationId)) return;
+      this._avatarInFlight.add(job.conversationId);
+      try {
+        // `force` vem de contacts.update (foto trocada): nesse caso a conversa
+        // já tem avatarUrl e mesmo assim precisa ser rebaixada.
+        if (!job.force) {
+          const atual = await getConversation(job.conversationId);
+          if (atual?.avatarUrl) return;
+        }
+        const url = await this.getProfilePicUrl(job.jid);
+        if (!url) return; // sem foto ou perfil privado — não insiste
+        const saved = await downloadAndSaveFromUrl(url);
+        if (!saved) throw new Error("download da foto de perfil falhou");
+        const prior = await getConversation(job.conversationId);
+        if (!prior) return;
+        const updated = await upsertConversation({ id: job.conversationId, avatarUrl: saved.url });
+        this._emitIo("conversation:update", { conversation: updated });
+      } catch (err) {
+        const attempts = (job.attempts || 0) + 1;
+        if (attempts <= MEDIA_RETRY_MAX) this._retryLater(job, attempts);
+        else console.warn(`[${this.instanceId}] avatar de ${job.jid} desistiu após ${MEDIA_RETRY_MAX} tentativas: ${err.message}`);
+      } finally {
+        this._avatarInFlight.delete(job.conversationId);
+      }
     }
+  }
+
+  // Ao reconectar, tenta de novo a foto das conversas que ainda estão sem ela.
+  async _backfillAvatars() {
+    const pendentes = await listConversationsMissingAvatar(this.instanceId, AVATAR_BACKFILL_LIMIT);
+    for (const conv of pendentes) {
+      this.mediaQueue.enqueue({ kind: "avatar", jid: conv.chatId, conversationId: conv.id });
+    }
+    if (pendentes.length) console.log(`[${this.instanceId}] backfill de avatar enfileirado para ${pendentes.length} conversa(s)`);
   }
 
   // ---- API pública usada por rotas/manager ----
@@ -574,8 +638,27 @@ export class WhatsAppConnection extends EventEmitter {
     return this._onLidLearned(lid, pn);
   }
 
+  // null = o contato genuinamente não tem foto visível (não adianta insistir).
+  // Qualquer outro erro é transitório e sobe, para virar retentativa.
   async getProfilePicUrl(jid) {
-    try { return await this.sock.profilePictureUrl(jid, "image"); } catch { return null; }
+    try {
+      return await this.sock.profilePictureUrl(jid, "image");
+    } catch (err) {
+      const status = err?.output?.statusCode ?? err?.data?.statusCode;
+      const msg = String(err?.message || "").toLowerCase();
+      if (status === 404 || status === 401 || status === 403
+        || msg.includes("item-not-found") || msg.includes("forbidden") || msg.includes("not-authorized")) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  // Enfileira a busca da foto de perfil de um contato. Usado por rotas que
+  // criam conversa fora do fluxo de mensagem (ex.: POST /conversations/start).
+  enqueueAvatar(jid, conversationId) {
+    if (!jid || !conversationId || jidIsUnsupported(jid)) return;
+    this.mediaQueue.enqueue({ kind: "avatar", jid, conversationId });
   }
 
   async requestPairingCode(phoneNumber) {
@@ -671,9 +754,11 @@ export class WhatsAppConnection extends EventEmitter {
     await this.resolver.flush().catch(() => {});
     this.resolver.dispose();
     this.mediaQueue.clear();
+    for (const timer of this._retryTimers) clearTimeout(timer);
+    this._retryTimers.clear();
     this.chatsById.clear();
     this.contactsByJid.clear();
-    this._avatarDone.clear();
+    this._avatarInFlight.clear();
     this._newestSeenKeyByChat.clear();
     this._resendRequested.clear();
     this.sock = null;

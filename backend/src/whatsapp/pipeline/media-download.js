@@ -1,6 +1,6 @@
 import { downloadMediaMessage } from "@whiskeysockets/baileys";
 import { saveMediaFromBuffer } from "../../storage/media-repo.js";
-import { isMediaMessage } from "../message-mapper.js";
+import { extractContent, isMediaMessage } from "../message-mapper.js";
 
 const logger = { level: "fatal", child: () => logger, error() {}, warn() {}, info() {}, debug() {}, trace() {}, fatal() {} };
 
@@ -30,17 +30,16 @@ export async function downloadIfMedia(msg, sock) {
     if (sock?.updateMediaMessage) ctx.reuploadRequest = sock.updateMediaMessage;
     const buffer = await downloadMediaMessage(msg, "buffer", {}, ctx);
     if (!buffer || !buffer.length) return {};
-    const content = msg.message || {};
+    // extractContent desembrulha ephemeral/viewOnce/edited — sem ele uma
+    // figurinha efêmera caía em application/octet-stream, era salva como .bin e
+    // o <img> recusava o Content-Type.
+    const content = extractContent(msg);
     const inner =
       content.imageMessage ||
       content.videoMessage ||
       content.audioMessage ||
       content.documentMessage ||
-      content.stickerMessage ||
-      content.ephemeralMessage?.message?.imageMessage ||
-      content.ephemeralMessage?.message?.videoMessage ||
-      content.ephemeralMessage?.message?.audioMessage ||
-      content.ephemeralMessage?.message?.documentMessage;
+      content.stickerMessage;
     const mimetype = inner?.mimetype || "application/octet-stream";
     const saved = await saveMediaFromBuffer(buffer, mimetype);
     return { mediaUrl: saved.url, mediaMime: saved.mimeType };

@@ -13,7 +13,7 @@ import { useInstances } from "@/hooks/useInstances";
 import { getSocket } from "@/lib/whatsapp-socket";
 import { Campaign, CampaignPreview, whatsappApi } from "@/lib/whatsapp-api";
 import { renderTemplate, TEMPLATE_VARIABLES, variaveisDesconhecidas } from "@/lib/message-template";
-import { csvNumber, downloadCsv } from "@/lib/csv";
+import { CellValue, downloadXlsx } from "@/lib/xlsx";
 import { cn } from "@/lib/utils";
 
 // Só as variáveis que uma campanha consegue preencher: não há lista importada
@@ -178,27 +178,29 @@ export default function Campanhas() {
     try {
       const targets = await whatsappApi.listCampaignTargets(campaign.id);
       if (!targets.length) return toast.error("Esta campanha não tem contatos");
+      // Datas e números vão CRUS: a célula do .xlsx é tipada e quem formata é
+      // o Excel, conforme o locale de quem abre.
       const header = ["Cliente", "Telefone", "Status", "Enviado em", "Respondeu em", "Erro"];
-      const rows = targets.map(t => [
+      const rows: CellValue[][] = targets.map(t => [
         t.customer,
         t.phone,
         t.status,
-        t.sentAt ? formatDateTime(t.sentAt) : "",
-        t.repliedAt ? formatDateTime(t.repliedAt) : "",
+        t.sentAt ? new Date(t.sentAt) : "",
+        t.repliedAt ? new Date(t.repliedAt) : "",
         t.error || "",
       ]);
-      const resumo = [
+      const resumo: CellValue[][] = [
         [],
         ["Campanha", campaign.name],
-        ["Criada em", formatDateTime(campaign.createdAt)],
+        ["Criada em", new Date(campaign.createdAt)],
         ["Público", campaign.total],
         ["Enviadas", campaign.sent],
         ["Falhas", campaign.failed],
         ["Respostas", campaign.replied],
-        ["Taxa de resposta (%)", campaign.sent ? csvNumber((campaign.replied / campaign.sent) * 100, 1) : "0,0"],
+        ["Taxa de resposta (%)", campaign.sent ? (campaign.replied / campaign.sent) * 100 : 0],
       ];
       const slug = campaign.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-      downloadCsv(`campanha-${slug}.csv`, [header, ...rows, ...resumo]);
+      await downloadXlsx(`campanha-${slug}.xlsx`, header, [...rows, ...resumo]);
       toast.success(`${targets.length} contatos exportados`);
     } catch (err) {
       toast.error(`Falha ao exportar: ${err instanceof Error ? err.message : "erro"}`);

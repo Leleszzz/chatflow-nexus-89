@@ -112,7 +112,10 @@ export class MessagePipeline {
       customer: isPlaceholderName(prior?.customer) ? conv.customer : prior.customer,
       whatsappName: isPlaceholderName(prior?.whatsappName) ? conv.whatsappName : prior.whatsappName,
       phone: prior?.phone || conv.phone,
-      avatarUrl: prior?.avatarUrl,
+      // Nunca escrever a chave quando não há avatar: o driver do Mongo serializa
+      // `undefined` como null e isso apagaria a foto que o job de avatar acabou
+      // de gravar em paralelo.
+      ...(prior?.avatarUrl ? { avatarUrl: prior.avatarUrl } : {}),
       lastMessage: historyPreview ? (previewFor(lastStored) || conv.lastMessage) : previewFor(lastStored),
       lastMessageId: lastStored?.id,
       lastMessageFromMe: lastStored?.fromMe,
@@ -229,7 +232,11 @@ export class MessagePipeline {
         stored.chatId = jid;
         mapped.push(stored);
         if (!lastStored || stored.timestamp > lastStored.timestamp) lastStored = stored;
-        const recentEnough = !HISTORY_MEDIA_CUTOFF_MS || (stored.timestamp * 1000) >= (Date.now() - HISTORY_MEDIA_CUTOFF_MS);
+        // Figurinhas são minúsculas e quase sempre ainda baixáveis — não faz
+        // sentido descartá-las pelo corte de idade junto com vídeo/documento.
+        const recentEnough = !HISTORY_MEDIA_CUTOFF_MS
+          || stored.type === "sticker"
+          || (stored.timestamp * 1000) >= (Date.now() - HISTORY_MEDIA_CUTOFF_MS);
         if (isMediaMessage(m) && recentEnough) this.mediaQueue.enqueue({ kind: "media", msg: m, jid, messageId: stored.id });
       }
       const insertedIdx = await bulkSaveMessages(this.instanceId, jid, mapped);

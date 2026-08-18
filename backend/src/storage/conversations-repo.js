@@ -162,6 +162,25 @@ export async function repairMissingPhones(instanceId) {
   return corrigidas;
 }
 
+// Conversas que ainda não têm foto de perfil. Alimenta o backfill de avatares
+// ao reconectar — sem ele, uma conversa que falhou em baixar a foto só tentaria
+// de novo quando chegasse uma mensagem nova.
+export async function listConversationsMissingAvatar(instanceId, limit = 500) {
+  return col()
+    .find(
+      {
+        instanceId,
+        isGroup: false,
+        archivedAt: null,
+        $or: [{ avatarUrl: null }, { avatarUrl: "" }, { avatarUrl: { $exists: false } }],
+      },
+      { projection: { _id: 0, id: 1, chatId: 1 } },
+    )
+    .sort({ lastInteraction: -1 })
+    .limit(limit)
+    .toArray();
+}
+
 export async function removeConversationsByInstance(instanceId) {
   await col().deleteMany({ instanceId });
 }
