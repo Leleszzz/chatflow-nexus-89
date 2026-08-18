@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { getOpenaiSettings } from "../storage/settings-repo.js";
 import { requireAuth } from "../middleware/require-auth.js";
-import { getClient } from "../whatsapp/instance-manager.js";
+import { connectionManager } from "../whatsapp/ConnectionManager.js";
 import { listMessages } from "../storage/messages-repo.js";
 import { finalizeOutgoingMessage } from "../whatsapp/outgoing.js";
 import { addUsage, getAllUsage, resetUsage } from "../storage/agent-usage-repo.js";
@@ -188,7 +188,7 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
     return res.status(400).json({ error: "instanceId e chatId são obrigatórios" });
   }
 
-  const client = getClient(instanceId);
+  const client = connectionManager.get(instanceId);
   if (!client) return res.status(404).json({ error: "instância não conectada" });
 
   const { apiKey } = await getOpenaiSettings();

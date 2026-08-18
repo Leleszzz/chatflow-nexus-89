@@ -1,4 +1,4 @@
-import { getClient } from "./instance-manager.js";
+import { connectionManager } from "./ConnectionManager.js";
 import { finalizeOutgoingMessage } from "./outgoing.js";
 import { emitToInstance } from "../socket/events.js";
 import { listDueScheduled, updateScheduled } from "../storage/scheduled-messages-repo.js";
@@ -13,7 +13,7 @@ async function processDue(io) {
   try {
     const due = await listDueScheduled();
     for (const sched of due) {
-      const client = getClient(sched.instanceId);
+      const client = connectionManager.get(sched.instanceId);
       if (!client) {
         // Instância desconectada: mantém pendente para tentar de novo no próximo tick.
         continue;

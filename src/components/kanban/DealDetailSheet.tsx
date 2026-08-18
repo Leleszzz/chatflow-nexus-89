@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { useCRM } from "@/store/crm-store";
-import { ClientTemperatureBadge, TagBadge } from "@/components/shared/Badges";
+import { TagBadge } from "@/components/shared/Badges";
 import { CalendarClock, CheckCircle2, Clock3, FolderOpen, MessageCircle, Plus, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
@@ -270,11 +270,6 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
             <div>
               <Label htmlFor="notes">Observação interna</Label>
               <Textarea id="notes" defaultValue={deal.notes} onBlur={event => updateDeal(deal.id, { notes: event.target.value })} rows={3} />
-            </div>
-
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Status:</span>
-              <ClientTemperatureBadge temp={deal.temperature} size="md" />
             </div>
           </div>
 

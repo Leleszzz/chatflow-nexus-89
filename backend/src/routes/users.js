@@ -6,6 +6,7 @@ import {
   updateUser,
   getSanitizedUser,
 } from "../storage/users-repo.js";
+import { removeUserFromThreads } from "../storage/internal-chat-repo.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
 export const usersRouter = Router();
@@ -60,5 +61,11 @@ usersRouter.delete("/:id", requireAuth({ admin: true }), async (req, res) => {
   const target = await getSanitizedUser(req.params.id);
   if (!target) return res.status(404).json({ error: "Usuário não encontrado" });
   await deleteUser(req.params.id);
+  // Sem isso sobrariam DMs apontando para um usuário que não existe mais.
+  try {
+    await removeUserFromThreads(req.params.id);
+  } catch (err) {
+    console.warn(`[users] limpeza do chat interno falhou: ${err.message}`);
+  }
   res.status(204).end();
 });

@@ -1,7 +1,8 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Kanban, MessageSquare, CalendarDays, Bot, BarChart3, Settings, Sparkles, Smartphone, Megaphone, Send, Users, X, FolderOpen } from "lucide-react";
+import { LayoutDashboard, Kanban, MessageSquare, CalendarDays, Bot, BarChart3, Settings, Sparkles, Smartphone, Megaphone, Users, UsersRound, X, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PermissionKey, useCRM } from "@/store/crm-store";
+import { useInternalUnreadBadge } from "@/hooks/useInternalChat";
 import { Button } from "@/components/ui/button";
 
 const sections: {
@@ -13,6 +14,7 @@ const sections: {
     items: [
       { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true, permission: "Ver dashboard" },
       { to: "/conversas", label: "Conversas", icon: MessageSquare },
+      { to: "/equipe", label: "Equipe", icon: UsersRound },
       { to: "/kanban", label: "Kanban", icon: Kanban },
       { to: "/calendario", label: "Calendário", icon: CalendarDays },
       { to: "/prontuarios", label: "Prontuários", icon: FolderOpen },
@@ -23,7 +25,6 @@ const sections: {
     items: [
       { to: "/agentes", label: "Agentes", icon: Bot, permission: "Criar agentes" },
       { to: "/campanhas", label: "Campanhas", icon: Megaphone },
-      { to: "/disparo-em-massa", label: "Disparo em massa", icon: Send, permission: "Alterar configurações da empresa" },
     ],
   },
   {
@@ -38,7 +39,9 @@ const sections: {
 ];
 
 export function Sidebar({ mobile = false, onClose }: { mobile?: boolean; onClose?: () => void }) {
-  const { hasPermission } = useCRM();
+  const { hasPermission, currentUser } = useCRM();
+  // Não-lidas do chat interno, para o usuário ver que tem mensagem sem estar na página.
+  const internalUnread = useInternalUnreadBadge(currentUser?.id);
   const visibleSections = sections
     .map(section => ({ ...section, items: section.items.filter(item => !item.permission || hasPermission(item.permission)) }))
     .filter(section => section.items.length > 0);
@@ -85,6 +88,11 @@ export function Sidebar({ mobile = false, onClose }: { mobile?: boolean; onClose
                 >
                   <Icon className="w-[18px] h-[18px]" />
                   <span>{label}</span>
+                  {to === "/equipe" && internalUnread > 0 && (
+                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1.5 text-[10px] font-bold text-destructive-foreground">
+                      {internalUnread > 99 ? "99+" : internalUnread}
+                    </span>
+                  )}
                 </NavLink>
               ))}
             </div>

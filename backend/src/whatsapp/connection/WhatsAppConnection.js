@@ -120,7 +120,6 @@ export class WhatsAppConnection extends EventEmitter {
       ...(version ? { version } : {}),
       auth: state,
       logger,
-      printQRInTerminal: false,
       syncFullHistory: historyMode === "full",
       // Sem isso o Baileys só processa notificações de histórico quando
       // syncFullHistory=true — o modo "recent" depende deste override.
@@ -539,7 +538,6 @@ export class WhatsAppConnection extends EventEmitter {
 
   getQrDataUrl() { return this.lastQrDataUrl; }
   getPairingCode() { return this.lastPairingCode; }
-  isRegistered() { return Boolean(this.sock?.authState?.creds?.registered); }
   getChatById(jid) { return this.chatsById.get(jid) || null; }
   sendMessage(jid, content, options) { return this.sock.sendMessage(jid, content, options); }
 

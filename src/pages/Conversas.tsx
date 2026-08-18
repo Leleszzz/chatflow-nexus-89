@@ -7,14 +7,14 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ClientTemperatureBadge, ConversationStatus, StatusBadge, TagBadge } from "@/components/shared/Badges";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { ArrowDownWideNarrow, ArrowUpNarrowWide, Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, ClipboardList, Clock, Contact as ContactIcon, Copy, FileText, Film, Filter, FolderOpen, Image as ImageIcon, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, MessageSquareText, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDownWideNarrow, ArrowUpNarrowWide, Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, ClipboardList, Clock, Contact as ContactIcon, Copy, FileText, Film, Filter, FolderOpen, Image as ImageIcon, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, MessageSquareText, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, SlidersHorizontal, Smartphone, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -130,14 +130,38 @@ const conversationStatus = (conversation: Conversation): ConversationStatus => {
   return "em-atendimento";
 };
 
+// Liga/desliga um item num Set de filtro sem mutar o anterior.
+const toggleInSet = (current: Set<string>, id: string) => {
+  const next = new Set(current);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  return next;
+};
+
+// Ordem: o padrão primeiro, depois o que exige ação do atendente, e por último
+// os estados terminais.
 const statusFilters = [
+  { id: "todas", label: "Todas" },
+  { id: "minhas", label: "Minhas conversas" },
   { id: "sem-resposta", label: "Sem resposta" },
   { id: "cliente-por-ultimo", label: "Cliente falou por último" },
-  { id: "minhas", label: "Minhas conversas" },
   { id: "aguardando-cliente", label: "Aguardando cliente" },
   { id: "finalizadas", label: "Finalizadas" },
-  { id: "todas", label: "Todas" },
 ];
+
+// Usado tanto para filtrar a lista quanto para contar o badge de cada chip —
+// manter os dois em um único lugar evita contador divergente da lista.
+const matchesStatusFilter = (conversation: Conversation, filterId: string, currentUserId: string) => {
+  if (filterId === "todas") return true;
+  if (filterId === "minhas") return [conversation.sellerId, ...(conversation.assignedSellerIds || [])].includes(currentUserId);
+  const status = conversationStatus(conversation);
+  if (filterId === "finalizadas") return status === "finalizada";
+  // Última mensagem veio do cliente (a bola está com você). Compara com
+  // `false` explicitamente: conversa sem nenhuma mensagem tem o campo
+  // indefinido e não deve entrar aqui.
+  if (filterId === "cliente-por-ultimo") return conversation.lastMessageFromMe === false;
+  return status === filterId;
+};
 
 const formatTime = (iso: string) => {
   const d = new Date(iso);
@@ -176,6 +200,17 @@ export default function Conversas() {
   // Filtro por etapa do funil (múltipla escolha). Vazio = todas as etapas.
   const [stageFilter, setStageFilter] = useState<Set<string>>(new Set());
   const [stageFilterOpen, setStageFilterOpen] = useState(false);
+  // Filtros por instância e por responsável — só o admin vê estes controles.
+  // Vazio = sem recorte.
+  const [instanceFilter, setInstanceFilter] = useState<Set<string>>(new Set());
+  const [sellerFilter, setSellerFilter] = useState<Set<string>>(new Set());
+  const [adminFilterOpen, setAdminFilterOpen] = useState(false);
+  const adminFilterCount = instanceFilter.size + sellerFilter.size;
+  // Arquivamento de conversas — exclusivo do admin.
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  const [archivedListOpen, setArchivedListOpen] = useState(false);
+  const [archivedList, setArchivedList] = useState<WAConversation[]>([]);
+  const [archivedLoading, setArchivedLoading] = useState(false);
   const [newTag, setNewTag] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -268,7 +303,10 @@ export default function Conversas() {
   const [selectedId, setSelectedId] = useState(initialSelectedId);
 
   const activeSearch = conversationSearch.toLowerCase().trim();
-  const visibleConversations = (activeSearch
+  // Tudo o que passa pela busca e pelos filtros de recorte (etapa, instância,
+  // responsável), mas ainda sem o filtro de status. É a base dos contadores dos
+  // chips: cada chip mostra quantas conversas cairiam nele.
+  const scopedConversations = (activeSearch
     ? conversations.filter(conversation =>
       conversation.customer.toLowerCase().includes(activeSearch) ||
       conversation.phone.toLowerCase().includes(activeSearch) ||
@@ -276,20 +314,27 @@ export default function Conversas() {
       conversation.tags.some(tag => tag.toLowerCase().includes(activeSearch)) ||
       sellerOptions.some(user => [user.name, user.role].join(" ").toLowerCase().includes(activeSearch) && [conversation.sellerId, ...(conversation.assignedSellerIds || [])].includes(user.id))
     )
-    : conversations).filter(conversation => {
-      const status = conversationStatus(conversation);
-      if (statusFilter === "todas") return true;
-      if (statusFilter === "minhas") return [conversation.sellerId, ...(conversation.assignedSellerIds || [])].includes(currentUser?.id || "");
-      if (statusFilter === "finalizadas") return status === "finalizada";
-      // Última mensagem veio do cliente (a bola está com você). Compara com
-      // `false` explicitamente: conversa sem nenhuma mensagem tem o campo
-      // indefinido e não deve entrar aqui.
-      if (statusFilter === "cliente-por-ultimo") return conversation.lastMessageFromMe === false;
-      return status === statusFilter;
-    })
+    : conversations)
     // Etapa do funil (múltipla): vazio = todas. Conversa sem etapa cai fora
     // quando há filtro ativo (não pertence a nenhuma etapa selecionada).
     .filter(conversation => stageFilter.size === 0 || (conversation.stage ? stageFilter.has(conversation.stage) : false))
+    // Instância e responsável: filtros exclusivos do admin. Vazio = todos.
+    .filter(conversation => instanceFilter.size === 0 || (conversation.instanceId ? instanceFilter.has(conversation.instanceId) : false))
+    .filter(conversation => sellerFilter.size === 0
+      || [conversation.sellerId, ...(conversation.assignedSellerIds || [])].some(id => id && sellerFilter.has(id)));
+
+  // Uma passada só pela lista, distribuindo cada conversa nos chips que casam —
+  // evita varrer `scopedConversations` uma vez por filtro.
+  const statusCounts: Record<string, number> = {};
+  for (const filter of statusFilters) statusCounts[filter.id] = 0;
+  for (const conversation of scopedConversations) {
+    for (const filter of statusFilters) {
+      if (matchesStatusFilter(conversation, filter.id, currentUser?.id || "")) statusCounts[filter.id] += 1;
+    }
+  }
+
+  const visibleConversations = scopedConversations
+    .filter(conversation => matchesStatusFilter(conversation, statusFilter, currentUser?.id || ""))
     // Ordena só a lista exibida — `conversations` continua na ordem padrão, para
     // a conversa selecionada não pular ao inverter a ordenação.
     .sort((a, b) => (sortOrder === "recentes"
@@ -387,7 +432,7 @@ export default function Conversas() {
   useLayoutEffect(() => {
     listScrollRef.current = 0;
     if (conversationListRef.current) conversationListRef.current.scrollTop = 0;
-  }, [statusFilter, activeSearch, sortOrder, stageFilter]);
+  }, [statusFilter, activeSearch, sortOrder, stageFilter, instanceFilter, sellerFilter]);
 
   useLayoutEffect(() => {
     const el = conversationListRef.current;
@@ -396,6 +441,49 @@ export default function Conversas() {
       el.scrollTop = listScrollRef.current;
     }
   }, [visibleConversations]);
+
+  // Arquivar é soft delete: some da lista mas o histórico continua no banco e a
+  // conversa pode ser restaurada. Se o contato mandar mensagem nova, o backend
+  // desarquiva sozinho.
+  const handleArchiveConversation = async () => {
+    if (!selected?.id) return;
+    try {
+      await whatsappApi.archiveConversation(selected.id);
+      setArchiveConfirmOpen(false);
+      setSelectedId("");
+      await refreshConversations();
+      toast.success(`Conversa com ${selected.customer} arquivada`);
+    } catch (err) {
+      toast.error(`Não foi possível arquivar: ${err instanceof Error ? err.message : "erro desconhecido"}`);
+    }
+  };
+
+  const loadArchivedConversations = async () => {
+    setArchivedLoading(true);
+    try {
+      setArchivedList(await whatsappApi.listArchivedConversations());
+    } catch (err) {
+      toast.error(`Não foi possível carregar as arquivadas: ${err instanceof Error ? err.message : "erro desconhecido"}`);
+    } finally {
+      setArchivedLoading(false);
+    }
+  };
+
+  const handleRestoreConversation = async (conversation: WAConversation) => {
+    try {
+      await whatsappApi.restoreConversation(conversation.id);
+      setArchivedList(cur => cur.filter(item => item.id !== conversation.id));
+      await refreshConversations();
+      toast.success(`Conversa com ${conversation.customer} restaurada`);
+    } catch (err) {
+      toast.error(`Não foi possível restaurar: ${err instanceof Error ? err.message : "erro desconhecido"}`);
+    }
+  };
+
+  useEffect(() => {
+    if (archivedListOpen) loadArchivedConversations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [archivedListOpen]);
 
   const updateSelectedConversation = (patch: Partial<Conversation>) => {
     if (!selected) return;
@@ -1056,12 +1144,7 @@ export default function Conversas() {
                       >
                         <Checkbox
                           checked={stageFilter.has(stage.id)}
-                          onCheckedChange={() => setStageFilter(cur => {
-                            const next = new Set(cur);
-                            if (next.has(stage.id)) next.delete(stage.id);
-                            else next.add(stage.id);
-                            return next;
-                          })}
+                          onCheckedChange={() => setStageFilter(cur => toggleInSet(cur, stage.id))}
                         />
                         <span className="truncate">{stage.title}</span>
                       </label>
@@ -1069,24 +1152,110 @@ export default function Conversas() {
                   </div>
                 </PopoverContent>
               </Popover>
+              {isAdmin && (
+                <Popover open={adminFilterOpen} onOpenChange={setAdminFilterOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      title="Filtrar por instância ou responsável"
+                      className={cn("relative", adminFilterCount > 0 && "border-primary text-primary")}
+                    >
+                      <SlidersHorizontal className="h-4 w-4" />
+                      {adminFilterCount > 0 && (
+                        <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                          {adminFilterCount}
+                        </span>
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="w-64 p-2">
+                    <div className="mb-1 flex items-center justify-between px-1">
+                      <span className="text-xs font-semibold uppercase text-muted-foreground">Instância</span>
+                      {adminFilterCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => { setInstanceFilter(new Set()); setSellerFilter(new Set()); }}
+                          className="text-[11px] font-medium text-primary hover:underline"
+                        >
+                          Limpar
+                        </button>
+                      )}
+                    </div>
+                    <div className="max-h-40 space-y-0.5 overflow-y-auto">
+                      {instancesList.length === 0 && (
+                        <p className="px-2 py-1.5 text-xs text-muted-foreground">Nenhuma instância cadastrada.</p>
+                      )}
+                      {instancesList.map(instance => (
+                        <label
+                          key={instance.id}
+                          className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-secondary"
+                        >
+                          <Checkbox
+                            checked={instanceFilter.has(instance.id)}
+                            onCheckedChange={() => setInstanceFilter(cur => toggleInSet(cur, instance.id))}
+                          />
+                          <Smartphone className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span className="truncate">{instance.name}</span>
+                        </label>
+                      ))}
+                    </div>
+
+                    <div className="mb-1 mt-2 border-t border-border px-1 pt-2">
+                      <span className="text-xs font-semibold uppercase text-muted-foreground">Responsável</span>
+                    </div>
+                    <div className="max-h-40 space-y-0.5 overflow-y-auto">
+                      {sellerOptions.map(user => (
+                        <label
+                          key={user.id}
+                          className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-secondary"
+                        >
+                          <Checkbox
+                            checked={sellerFilter.has(user.id)}
+                            onCheckedChange={() => setSellerFilter(cur => toggleInSet(cur, user.id))}
+                          />
+                          <span className="truncate">{user.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="mt-2 border-t border-border px-1 pt-2 text-[10px] leading-snug text-muted-foreground">
+                      O responsável só é conhecido quando a conversa tem um card no funil ou foi atribuída neste navegador.
+                    </p>
+                  </PopoverContent>
+                </Popover>
+              )}
               <Button variant="outline" size="icon" title="Iniciar conversa" onClick={openNewConversationDialog}>
                 <MessageCirclePlus className="h-4 w-4" />
               </Button>
             </div>
-            <div className="mt-3 flex gap-1 overflow-x-auto pb-1 scrollbar-thin">
-              {statusFilters.map(filter => (
-                <button
-                  key={filter.id}
-                  type="button"
-                  onClick={() => setStatusFilter(filter.id)}
-                  className={cn(
-                    "whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-semibold transition",
-                    statusFilter === filter.id ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {filter.label}
-                </button>
-              ))}
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {statusFilters.map(filter => {
+                const active = statusFilter === filter.id;
+                const count = statusCounts[filter.id] ?? 0;
+                return (
+                  <button
+                    key={filter.id}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setStatusFilter(filter.id)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-semibold transition",
+                      active ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground",
+                      !active && count === 0 && "opacity-60",
+                    )}
+                  >
+                    {filter.label}
+                    <span
+                      className={cn(
+                        "rounded px-1 text-[10px] font-bold tabular-nums",
+                        active ? "bg-primary-foreground/20 text-primary-foreground" : "bg-background/70 text-muted-foreground",
+                      )}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
           <div
@@ -1215,6 +1384,17 @@ export default function Conversas() {
                     <button onClick={openScheduleDialog} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-secondary">
                       <CalendarClock className="h-4 w-4 text-primary" /> Agendamentos de mensagens
                     </button>
+                    {isAdmin && (
+                      <>
+                        <div className="my-1 border-t border-border" />
+                        <button onClick={() => setArchivedListOpen(true)} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-secondary">
+                          <ArchiveRestore className="h-4 w-4 text-muted-foreground" /> Conversas arquivadas
+                        </button>
+                        <button onClick={() => setArchiveConfirmOpen(true)} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-destructive hover:bg-destructive/10">
+                          <Archive className="h-4 w-4" /> Arquivar esta conversa
+                        </button>
+                      </>
+                    )}
                   </PopoverContent>
                 </Popover>
               </div>
@@ -1959,6 +2139,62 @@ export default function Conversas() {
               </div>
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={archiveConfirmOpen} onOpenChange={setArchiveConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Arquivar conversa</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p>
+              A conversa com <span className="font-semibold">{selected?.customer}</span> vai sair da lista de atendimentos.
+            </p>
+            <p className="text-muted-foreground">
+              Nada é apagado: o histórico de mensagens continua salvo e você pode restaurar a conversa a qualquer momento
+              em <span className="font-medium">Conversas arquivadas</span>. Se o contato mandar uma mensagem nova, ela
+              volta para a lista automaticamente.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setArchiveConfirmOpen(false)}>Cancelar</Button>
+            <Button variant="destructive" className="gap-2" onClick={handleArchiveConversation}>
+              <Archive className="h-4 w-4" /> Arquivar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={archivedListOpen} onOpenChange={setArchivedListOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Conversas arquivadas</DialogTitle>
+          </DialogHeader>
+          {archivedLoading ? (
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Carregando...
+            </div>
+          ) : archivedList.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">Nenhuma conversa arquivada.</p>
+          ) : (
+            <div className="max-h-[60vh] space-y-1.5 overflow-y-auto">
+              {archivedList.map(conversation => (
+                <div key={conversation.id} className="flex items-center gap-3 rounded-lg border border-border/70 p-2.5">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{conversation.customer || conversation.phone}</div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {conversation.phone}
+                      {instanceNameById.get(conversation.instanceId) && ` · ${instanceNameById.get(conversation.instanceId)}`}
+                    </div>
+                  </div>
+                  <Button variant="outline" size="sm" className="gap-1.5" onClick={() => handleRestoreConversation(conversation)}>
+                    <ArchiveRestore className="h-3.5 w-3.5" /> Restaurar
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </AppLayout>

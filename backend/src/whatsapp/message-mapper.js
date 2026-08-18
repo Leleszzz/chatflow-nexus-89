@@ -64,20 +64,6 @@ export function jidIsUnsupported(jid) {
   return false;
 }
 
-export function isGroupChat(chatOrJid) {
-  if (!chatOrJid) return false;
-  if (typeof chatOrJid === "string") return jidIsGroup(chatOrJid);
-  if (chatOrJid.isGroup) return true;
-  const id = chatOrJid.id || "";
-  return jidIsGroup(typeof id === "string" ? id : "");
-}
-
-export function isUnsupportedChat(chat) {
-  if (!chat) return true;
-  const jid = typeof chat === "string" ? chat : (chat.id || chat.chatId || "");
-  return jidIsUnsupported(typeof jid === "string" ? jid : "");
-}
-
 function previewFor(message) {
   if (!message) return "";
   if (message.body) return message.body;

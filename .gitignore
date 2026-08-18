@@ -10,6 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+.vite
 *.local
 *.zip
 
@@ -28,3 +29,4 @@ dist-ssr
 backend/node_modules
 backend/data
 backend/.env
+backend/.wwebjs_cache

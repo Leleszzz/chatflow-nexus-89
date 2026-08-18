@@ -37,7 +37,3 @@ export function getSocket(): Socket {
 export function joinInstance(instanceId: string) {
   getSocket().emit("join", instanceId);
 }
-
-export function leaveInstance(instanceId: string) {
-  getSocket().emit("leave", instanceId);
-}

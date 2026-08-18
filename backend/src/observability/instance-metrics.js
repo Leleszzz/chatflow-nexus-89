@@ -34,9 +34,4 @@ export const metrics = {
   remove(instanceId) {
     byInstance.delete(instanceId);
   },
-  snapshot() {
-    const out = {};
-    for (const [id, e] of byInstance) out[id] = { ...e };
-    return out;
-  },
 };

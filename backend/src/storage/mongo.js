@@ -49,6 +49,10 @@ export const collections = {
   stages: "stages",
   leadList: "lead_list",
   quickReplies: "quick_replies",
+  internalThreads: "internal_threads",
+  internalMessages: "internal_messages",
+  campaigns: "campaigns",
+  campaignTargets: "campaign_targets",
 };
 
 async function ensureIndexes() {
@@ -61,5 +65,13 @@ async function ensureIndexes() {
     getCol(collections.deals).createIndex({ stage: 1 }),
     getCol(collections.deals).createIndex({ sellerId: 1 }),
     getCol(collections.stages).createIndex({ order: 1 }),
+    getCol(collections.internalThreads).createIndex({ memberIds: 1, lastMessageAt: -1 }),
+    getCol(collections.internalMessages).createIndex({ threadId: 1, createdAt: 1 }),
+    // Contagem de não-lidas: filtra por remetente diferente e ausência do leitor.
+    getCol(collections.internalMessages).createIndex({ threadId: 1, senderId: 1, readBy: 1 }),
+    getCol(collections.campaigns).createIndex({ status: 1, createdAt: -1 }),
+    getCol(collections.campaignTargets).createIndex({ campaignId: 1, status: 1 }),
+    // Marcar resposta do cliente: busca pela conversa que acabou de responder.
+    getCol(collections.campaignTargets).createIndex({ conversationId: 1, status: 1 }),
   ]);
 }

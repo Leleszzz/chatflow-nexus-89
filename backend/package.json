@@ -23,8 +23,7 @@
     "nanoid": "^5.0.7",
     "pino": "^9.5.0",
     "qrcode": "^1.5.4",
-    "socket.io": "^4.8.1",
-    "vite_react_shadcn_ts": "file:.."
+    "socket.io": "^4.8.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"

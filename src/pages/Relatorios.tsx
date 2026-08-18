@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { useCRM } from "@/store/crm-store";
-import { downloadCsv } from "@/lib/csv";
+import { csvNumber, downloadCsv } from "@/lib/csv";
 import { ClientTemperatureBadge, TagBadge } from "@/components/shared/Badges";
 import { Download, Play, FileText, Users, Bot, Flame, AlertTriangle, History, ShoppingBag, X } from "lucide-react";
 import { toast } from "sonner";
@@ -22,6 +22,8 @@ const REPORTS = [
   { id: "quentes", name: "Clientes quentes", desc: "Leads com alta probabilidade de compra", icon: Flame },
   { id: "kanban", name: "Histórico completo do Kanban", desc: "Movimentações entre etapas", icon: History },
 ];
+
+const TEMPERATURE_LABELS: Record<string, string> = { quente: "Quente", morno: "Morno", frio: "Frio" };
 
 const daysByPeriod: Record<string, number> = { today: 1, "7d": 7, "30d": 30, "90d": 90 };
 const refusalByStage: Record<string, string> = {
@@ -140,28 +142,73 @@ export default function Relatorios() {
 
   const refusalSelectOptions = refusalReasonsFromData.map(([reason]) => reason);
 
-  const exportCsv = () => {
-    if (!hasPermission("Exportar dados")) {
-      toast.error("Seu usuário não tem permissão para exportar dados");
-      return;
+  // Cada relatório exporta as colunas do que está na tela. Antes, todos os 8
+  // tipos emitiam as mesmas colunas de lead — em "por vendedora"/"por agente" o
+  // CSV saía com dados diferentes dos que o usuário estava vendo.
+  const buildCsv = (): { header: string[]; rows: Array<Array<string | number>> } | null => {
+    if (selected === "vendedoras") {
+      return {
+        header: ["Vendedora", "Atendimentos", "Vendas", "Conversão (%)", "Valor total (R$)"],
+        rows: sellerPerformance.map(s => [s.name, s.atendimentos, s.vendas, csvNumber(Number(s.conversao), 1), csvNumber(s.valor)]),
+      };
     }
-    const header = ["data", "cliente", "telefone", "vendedora", "status", "temperatura", "valor", "tags"];
-    const rows: Array<Array<string | number>> = reportRows.map(deal => {
+
+    if (selected === "agentes") {
+      return {
+        header: ["Agente", "Canal", "Conversas", "Ativo"],
+        rows: agentPerformance.map(a => [a.name, a.channel, a.conversations, a.active ? "Sim" : "Não"]),
+      };
+    }
+
+    // "kanban" prometia histórico de movimentação entre etapas, mas esse
+    // registro não existe em lugar nenhum do sistema. Melhor recusar do que
+    // exportar linhas de lead fingindo ser histórico.
+    if (selected === "kanban") return null;
+
+    const isRefusalReport = selected === "recusas";
+    const header = ["Data", "Cliente", "Telefone", "Vendedora", "Etapa", "Temperatura", "Valor estimado (R$)", "Tags"];
+    if (isRefusalReport) header.splice(5, 0, "Motivo da perda");
+
+    const rows = reportRows.map(deal => {
       const sellerName = teamUsers.find(s => s.id === deal.sellerId)?.name || "";
       const stageName = stages.find(s => s.id === deal.stage)?.title || "";
-      return [
+      const row: Array<string | number> = [
         format(new Date(deal.lastInteraction), "dd/MM/yyyy HH:mm"),
         deal.customer,
         deal.phone,
         sellerName,
         stageName,
-        deal.temperature,
-        deal.estimatedValue || 0,
-        deal.tags.join("|"),
+        TEMPERATURE_LABELS[deal.temperature] || deal.temperature,
+        csvNumber(deal.estimatedValue || 0),
+        deal.tags.join(" | "),
       ];
+      if (isRefusalReport) row.splice(5, 0, getRefusalReason(deal));
+      return row;
     });
-    downloadCsv(`relatorio-${selected}.csv`, [header, ...rows]);
-    toast.success("Relatório CSV exportado");
+
+    return { header, rows };
+  };
+
+  const exportCsv = () => {
+    if (!hasPermission("Exportar dados")) {
+      toast.error("Seu usuário não tem permissão para exportar dados");
+      return;
+    }
+
+    const report = buildCsv();
+    if (!report) {
+      toast.error("O histórico de movimentações do Kanban ainda não é registrado, então não há o que exportar neste relatório");
+      return;
+    }
+    if (!report.rows.length) {
+      toast.error("Nenhum registro no período e filtros selecionados");
+      return;
+    }
+
+    const reportName = REPORTS.find(r => r.id === selected)?.name || selected;
+    const stamp = format(new Date(), "yyyy-MM-dd");
+    downloadCsv(`relatorio-${selected}-${stamp}.csv`, [report.header, ...report.rows]);
+    toast.success(`${reportName}: ${report.rows.length} ${report.rows.length === 1 ? "linha exportada" : "linhas exportadas"}`);
   };
 
   if (!hasPermission("Ver relatórios")) {
@@ -251,7 +298,14 @@ export default function Relatorios() {
           </div>
           <div className="flex gap-2">
             <Button variant="outline" className="gap-2" onClick={() => toast.success(`${reportRows.length} registros carregados`)}><Play className="w-4 h-4" /> Gerar</Button>
-            <Button className="gap-2 bg-gradient-primary" onClick={exportCsv}><Download className="w-4 h-4" /> Exportar CSV</Button>
+            <Button
+              className="gap-2 bg-gradient-primary"
+              onClick={exportCsv}
+              disabled={selected === "kanban"}
+              title={selected === "kanban" ? "O histórico de movimentações do Kanban ainda não é registrado" : "Exportar CSV"}
+            >
+              <Download className="w-4 h-4" /> Exportar CSV
+            </Button>
           </div>
         </div>
 
@@ -291,7 +345,7 @@ export default function Relatorios() {
               <thead><tr className="text-left text-xs uppercase text-muted-foreground border-b">
                 <th className="py-2.5 font-semibold pr-3">Data</th><th className="py-2.5 font-semibold pr-3">Cliente</th>
                 <th className="py-2.5 font-semibold pr-3">WhatsApp</th><th className="py-2.5 font-semibold pr-3">Vendedora</th>
-                <th className="py-2.5 font-semibold pr-3">Status</th><th className="py-2.5 font-semibold pr-3">Temperatura</th>
+                <th className="py-2.5 font-semibold pr-3">Etapa</th><th className="py-2.5 font-semibold pr-3">Temperatura</th>
                 <th className="py-2.5 font-semibold pr-3">Valor</th><th className="py-2.5 font-semibold pr-3">Tags</th>
               </tr></thead>
               <tbody>

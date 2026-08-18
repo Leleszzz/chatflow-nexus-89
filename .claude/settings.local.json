@@ -38,7 +38,9 @@
       "Bash(node scripts/wipe-message-history.js)",
       "Bash(node --check src/storage/agent-usage-repo.js)",
       "Bash(node --check src/config.js)",
-      "Bash(git stash *)"
+      "Bash(git stash *)",
+      "Bash(node scripts/test-connection.js)",
+      "Bash(echo \"exit: $?\")"
     ]
   }
 }

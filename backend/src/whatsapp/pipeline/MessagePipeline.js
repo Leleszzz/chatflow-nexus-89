@@ -14,8 +14,9 @@ import {
   bulkSaveMessages,
   updateMessageAck,
 } from "../../storage/messages-repo.js";
-import { upsertConversation, getConversation, getConversationsByIds, countConversations } from "../../storage/conversations-repo.js";
+import { upsertConversation, getConversation, getConversationsByIds, countConversations, unarchiveOnActivity } from "../../storage/conversations-repo.js";
 import { cancelDueToClientReply } from "../../storage/scheduled-messages-repo.js";
+import { markRepliedByConversation } from "../../storage/campaigns-repo.js";
 import { emitToInstance } from "../../socket/events.js";
 
 // Idade máxima (em ms) para baixar mídia do HISTÓRICO. Mídia mais antiga que isso
@@ -164,6 +165,9 @@ export class MessagePipeline {
     });
     const prior = await getConversation(conv.id);
     const isNew = !prior;
+    // Conversa arquivada que volta a receber mensagem reaparece na lista —
+    // manter escondida faria o atendimento se perder silenciosamente.
+    if (prior?.archivedAt) await unarchiveOnActivity(conv.id);
     const persisted = await upsertConversation(this._enrich(conv, prior, stored));
 
     this._emit("message:new", { conversation: persisted, message: stored });
@@ -176,6 +180,13 @@ export class MessagePipeline {
         for (const sch of cancelled) this._emit("scheduled:update", { scheduled: sch });
       } catch (err) {
         console.warn(`[pipeline:${this.instanceId}] cancelar agendamento falhou: ${err.message}`);
+      }
+      // Resposta do cliente após receber uma campanha — é o que alimenta a
+      // taxa de resposta do relatório.
+      try {
+        if (await markRepliedByConversation(conv.id)) this._emit("campaign:update", { conversationId: conv.id });
+      } catch (err) {
+        console.warn(`[pipeline:${this.instanceId}] marcar resposta de campanha falhou: ${err.message}`);
       }
     }
   }

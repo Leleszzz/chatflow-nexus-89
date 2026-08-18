@@ -1,8 +1,8 @@
 import { Router } from "express";
-import { listConversations, getConversation, upsertConversation } from "../storage/conversations-repo.js";
+import { listConversations, getConversation, upsertConversation, archiveConversation, restoreConversation } from "../storage/conversations-repo.js";
 import { listMessages } from "../storage/messages-repo.js";
 import { buildConversationId, formatPhone, isPlaceholderName } from "../whatsapp/message-mapper.js";
-import { getClient } from "../whatsapp/instance-manager.js";
+import { connectionManager } from "../whatsapp/ConnectionManager.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
 export const conversationsRouter = Router();
@@ -19,11 +19,12 @@ function chatIdFromPhone(phone) {
 }
 
 conversationsRouter.get("/", async (req, res) => {
-  const { instanceId, limit, offset } = req.query;
+  const { instanceId, limit, offset, archived } = req.query;
   const items = await listConversations({
     instanceId: instanceId ? String(instanceId) : undefined,
     limit: limit ? Number(limit) : undefined,
     offset: offset ? Number(offset) : 0,
+    archived: archived === "true" || archived === "1",
   });
   res.json(items);
 });
@@ -60,7 +61,7 @@ conversationsRouter.post("/start", async (req, res) => {
   // (ex.: 9º dígito no Brasil) e aprende o LID do contato, para que a resposta
   // que chega via @lid caia NESTA conversa em vez de abrir uma duplicata.
   let resolvedName = "";
-  const client = getClient(instanceId);
+  const client = connectionManager.get(instanceId);
   if (client?.onWhatsApp) {
     try {
       const results = await client.onWhatsApp(chatId.split("@")[0]);
@@ -113,7 +114,7 @@ conversationsRouter.post("/:id/read", async (req, res) => {
   // erro de envio apenas deixam de marcar como lida no telefone do contato.
   if (unreadBefore > 0) {
     try {
-      const client = getClient(conv.instanceId);
+      const client = connectionManager.get(conv.instanceId);
       if (client?.isSocketOpen?.() && typeof client.readMessages === "function") {
         const cap = Math.min(unreadBefore, 100);
         // Busca mais que o cap porque mensagens enviadas (fromMe) se intercalam.
@@ -130,6 +131,30 @@ conversationsRouter.post("/:id/read", async (req, res) => {
   }
 
   res.json(next);
+});
+
+// Arquivar/restaurar são exclusivos do admin. É soft delete: nada é apagado do
+// banco, a conversa só deixa de aparecer na listagem padrão. O front já trata o
+// evento `conversation:delete` removendo a conversa da lista.
+conversationsRouter.delete("/:id", requireAuth({ admin: true }), async (req, res) => {
+  const conv = await getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ error: "conversa não encontrada" });
+  if (conv.archivedAt) return res.json({ conversation: conv, alreadyArchived: true });
+
+  const archived = await archiveConversation(req.params.id, req.user?.id);
+  const io = req.app.get("io");
+  if (io) io.to(`instance:${conv.instanceId}`).emit("conversation:delete", { conversationId: req.params.id });
+  res.json({ conversation: archived });
+});
+
+conversationsRouter.post("/:id/restore", requireAuth({ admin: true }), async (req, res) => {
+  const conv = await getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ error: "conversa não encontrada" });
+
+  const restored = await restoreConversation(req.params.id);
+  const io = req.app.get("io");
+  if (io) io.to(`instance:${conv.instanceId}`).emit("conversation:update", { conversation: restored });
+  res.json({ conversation: restored });
 });
 
 conversationsRouter.get("/:id/messages", async (req, res) => {

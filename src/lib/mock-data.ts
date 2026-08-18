@@ -1,5 +1,4 @@
 import agentsData from "@/banco-de-dados/agents.json";
-import dealsData from "@/banco-de-dados/deals.json";
 import modelOptionsData from "@/banco-de-dados/model-options.json";
 import stagesData from "@/banco-de-dados/stages.json";
 import tagsData from "@/banco-de-dados/tags.json";
@@ -61,7 +60,6 @@ export interface Agent {
 
 export const STAGES = stagesData as Stage[];
 export const ALL_TAGS = tagsData;
-export const INITIAL_DEALS = dealsData as Deal[];
 export const MODEL_OPTIONS = modelOptionsData as {
   id: Agent["model"];
   label: string;

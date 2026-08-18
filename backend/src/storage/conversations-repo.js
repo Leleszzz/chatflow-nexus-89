@@ -37,8 +37,12 @@ function dropOrphanLidDuplicates(convs) {
   });
 }
 
-export async function listConversations({ instanceId, limit, offset = 0 } = {}) {
+// `archived: true` lista só as arquivadas; o padrão esconde as arquivadas.
+// `{ archivedAt: null }` casa tanto com o campo ausente quanto com null, que é
+// o que queremos para as conversas que nunca foram arquivadas.
+export async function listConversations({ instanceId, limit, offset = 0, archived = false } = {}) {
   const query = instanceId ? { instanceId } : {};
+  query.archivedAt = archived ? { $ne: null } : null;
   const all = await col().find(query, { projection: { _id: 0 } }).toArray();
   const filtered = all.filter(c =>
     c &&
@@ -65,8 +69,9 @@ export async function getConversationsByIds(ids) {
 }
 
 // Contagem de conversas (não-grupo) de uma instância — usado no dashboard.
+// Arquivadas não entram na conta, para bater com o que a lista mostra.
 export async function countConversations(instanceId) {
-  return col().countDocuments({ instanceId, isGroup: false });
+  return col().countDocuments({ instanceId, isGroup: false, archivedAt: null });
 }
 
 // Mescla os campos informados sobre o documento existente (upsert).
@@ -159,4 +164,34 @@ export async function repairMissingPhones(instanceId) {
 
 export async function removeConversationsByInstance(instanceId) {
   await col().deleteMany({ instanceId });
+}
+
+// Arquivamento é soft delete: a conversa some das listagens mas o documento e
+// todas as mensagens continuam no banco, então dá para restaurar sem perda.
+export async function archiveConversation(id, userId) {
+  const res = await col().findOneAndUpdate(
+    { _id: id },
+    { $set: { archivedAt: new Date().toISOString(), archivedBy: userId || null } },
+    { returnDocument: "after", projection: { _id: 0 } },
+  );
+  return res?.value ?? res;
+}
+
+export async function restoreConversation(id) {
+  const res = await col().findOneAndUpdate(
+    { _id: id },
+    { $unset: { archivedAt: "", archivedBy: "" } },
+    { returnDocument: "after", projection: { _id: 0 } },
+  );
+  return res?.value ?? res;
+}
+
+// Chamado quando chega mensagem nova: uma conversa arquivada que volta a
+// receber mensagem reaparece na lista, senão o atendimento se perderia.
+export async function unarchiveOnActivity(id) {
+  const res = await col().updateOne(
+    { _id: id, archivedAt: { $exists: true, $ne: null } },
+    { $unset: { archivedAt: "", archivedBy: "" } },
+  );
+  return res.modifiedCount > 0;
 }

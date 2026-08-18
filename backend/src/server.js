@@ -14,16 +14,18 @@ import { settingsRouter } from "./routes/settings.js";
 import { agentsRouter } from "./routes/agents.js";
 import { prontuariosRouter } from "./routes/prontuarios.js";
 import { scheduledMessagesRouter } from "./routes/scheduled-messages.js";
-import { metricsRouter } from "./routes/metrics.js";
 import { dealsRouter } from "./routes/deals.js";
 import { stagesRouter } from "./routes/stages.js";
 import { leadsRouter } from "./routes/leads.js";
 import { quickRepliesRouter } from "./routes/quick-replies.js";
+import { internalChatRouter } from "./routes/internal-chat.js";
+import { campaignsRouter } from "./routes/campaigns.js";
 import { bindSocketHandlers } from "./socket/events.js";
-import { restoreAllInstances, setIO, shutdownAll } from "./whatsapp/instance-manager.js";
-import { startScheduledSender } from "./whatsapp/scheduled-sender.js";
+import { connectionManager } from "./whatsapp/ConnectionManager.js";
+import { startScheduledSender, stopScheduledSender } from "./whatsapp/scheduled-sender.js";
+import { startCampaignSender, stopCampaignSender } from "./whatsapp/campaign-sender.js";
 import { connectMongo, closeMongo } from "./storage/mongo.js";
-import { migrateJsonToMongo } from "./storage/migrate-to-mongo.js";
+import { reconcileOrphanInstances } from "./storage/reconcile-instances.js";
 
 async function ensureDirs() {
   await fs.mkdir(config.paths.dataDir, { recursive: true });
@@ -34,7 +36,7 @@ async function ensureDirs() {
 async function main() {
   await ensureDirs();
   await connectMongo();
-  await migrateJsonToMongo();
+  await reconcileOrphanInstances();
 
   const app = express();
   app.use(cors({ origin: config.corsOrigin, credentials: true }));
@@ -51,11 +53,12 @@ async function main() {
   app.use("/api/media", mediaRouter);
   app.use("/api/prontuarios", prontuariosRouter);
   app.use("/api/scheduled-messages", scheduledMessagesRouter);
-  app.use("/api/metrics", metricsRouter);
   app.use("/api/deals", dealsRouter);
   app.use("/api/stages", stagesRouter);
   app.use("/api/leads", leadsRouter);
   app.use("/api/quick-replies", quickRepliesRouter);
+  app.use("/api/internal-chat", internalChatRouter);
+  app.use("/api/campaigns", campaignsRouter);
 
   const httpServer = http.createServer(app);
   const io = new SocketServer(httpServer, {
@@ -63,18 +66,21 @@ async function main() {
   });
   app.set("io", io);
   bindSocketHandlers(io);
-  setIO(io);
+  connectionManager.setIO(io);
 
   httpServer.listen(config.port, () => {
     console.log(`[server] listening on http://localhost:${config.port}`);
-    restoreAllInstances().catch(err => console.error("[server] restoreAllInstances failed:", err));
+    connectionManager.restoreAll().catch(err => console.error("[server] restoreAllInstances failed:", err));
     startScheduledSender(io);
+    startCampaignSender(io);
   });
 
   const shutdown = async signal => {
     console.log(`[server] received ${signal}, shutting down...`);
     try {
-      await shutdownAll();
+      stopScheduledSender();
+      stopCampaignSender();
+      await connectionManager.shutdownAll();
       await closeMongo();
     } catch (err) {
       console.error("[server] shutdown error:", err);

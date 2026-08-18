@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import fs from "node:fs/promises";
-import { getClient } from "../whatsapp/instance-manager.js";
+import { connectionManager } from "../whatsapp/ConnectionManager.js";
 import { saveMedia } from "../storage/media-repo.js";
 import { finalizeOutgoingMessage } from "../whatsapp/outgoing.js";
 import { convertToOggOpus, isOggOpus } from "../whatsapp/audio-convert.js";
@@ -23,7 +23,7 @@ export const sendRouter = Router();
 // Auth ANTES do multer: requisição não autenticada não grava arquivo em disco.
 sendRouter.post("/:id/send", requireAuth(), upload.single("file"), async (req, res) => {
   const instanceId = req.params.id;
-  const client = getClient(instanceId);
+  const client = connectionManager.get(instanceId);
   if (!client) return res.status(404).json({ error: "instância não conectada" });
 
   const chatId = String(req.body?.chatId || "").trim();

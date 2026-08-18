@@ -12,10 +12,9 @@ const initials = (name: string) => (name || "").trim().slice(0, 2).toUpperCase()
 
 export function KanbanCard({ deal, avatarUrl, onClick, draggable = true }: { deal: Deal; avatarUrl?: string; nextAppointment?: Appointment; onClick: () => void; draggable?: boolean }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: deal.id, disabled: !draggable });
-  const { teamUsers, stages } = useCRM();
+  const { teamUsers } = useCRM();
   const sellerIds = Array.from(new Set([deal.sellerId, ...(deal.assignedSellerIds || [])].filter(Boolean)));
   const linkedSellers = sellerIds.map(id => teamUsers.find(seller => seller.id === id)).filter(Boolean);
-  const status = stages.find(stage => stage.id === deal.stage)?.title || deal.stage;
   const style = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined;
 
   return (
@@ -68,10 +67,6 @@ export function KanbanCard({ deal, avatarUrl, onClick, draggable = true }: { dea
           </span>
         </div>
         <ClientTemperatureBadge temp={deal.temperature} />
-      </div>
-
-      <div className="mb-2 rounded-md border border-border/60 px-2 py-1 text-[11px] font-medium text-foreground">
-        Status: {status}
       </div>
 
       <div className="flex items-center gap-1 border-t border-border/40 pt-2 text-[10px] text-muted-foreground">

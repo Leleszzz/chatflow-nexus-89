@@ -20,6 +20,11 @@ import { Stage } from "@/lib/mock-data";
 import { KANBAN_COLORS } from "@/lib/kanban-colors";
 import { cn } from "@/lib/utils";
 
+const COLOR_GROUPS = [
+  { id: "tema" as const, label: "Tema" },
+  { id: "paleta" as const, label: "Cores" },
+].map(group => ({ ...group, colors: KANBAN_COLORS.filter(color => color.group === group.id) }));
+
 function SortableStageItem({
   stage,
   onUpdate,
@@ -66,21 +71,27 @@ function SortableStageItem({
           </Button>
         </div>
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 sm:pl-11">
-        <span className="mr-1 text-[11px] text-muted-foreground">Cor da coluna:</span>
-        {KANBAN_COLORS.map(color => (
-          <button
-            key={color.value}
-            type="button"
-            title={color.label}
-            aria-label={`Cor ${color.label}`}
-            onClick={() => onColor(color.value)}
-            className={cn(
-              "h-5 w-5 rounded-full transition",
-              color.swatch,
-              stage.color === color.value ? "ring-2 ring-offset-1 ring-foreground" : "opacity-70 hover:opacity-100",
-            )}
-          />
+      <div className="mt-2 space-y-1.5 sm:pl-11">
+        <span className="text-[11px] text-muted-foreground">Cor da coluna:</span>
+        {COLOR_GROUPS.map(group => (
+          <div key={group.id} className="flex flex-wrap items-center gap-1.5">
+            <span className="w-12 shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">{group.label}</span>
+            {group.colors.map(color => (
+              <button
+                key={color.value}
+                type="button"
+                title={color.label}
+                aria-label={`Cor ${color.label}`}
+                aria-pressed={stage.color === color.value}
+                onClick={() => onColor(color.value)}
+                className={cn(
+                  "h-5 w-5 rounded-full transition",
+                  color.swatch,
+                  stage.color === color.value ? "ring-2 ring-offset-1 ring-foreground" : "opacity-70 hover:opacity-100",
+                )}
+              />
+            ))}
+          </div>
         ))}
       </div>
     </div>

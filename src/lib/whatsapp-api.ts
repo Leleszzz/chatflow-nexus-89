@@ -126,6 +126,82 @@ export type ScheduledMessage = {
   error: string | null;
 };
 
+// Chat interno da equipe — não passa pelo WhatsApp. Uma thread é 1:1 ("dm") ou
+// grupo ("group"); a diferença é só o `type` e o `name`.
+export type InternalThread = {
+  id: string;
+  type: "dm" | "group";
+  name: string;
+  memberIds: string[];
+  createdBy: string;
+  createdAt: string;
+  lastMessage: { body: string; senderId: string; createdAt: string } | null;
+  lastMessageAt: string | null;
+  /** Preenchido por thread na listagem do usuário atual. */
+  unreadCount?: number;
+};
+
+export type InternalMessage = {
+  id: string;
+  threadId: string;
+  senderId: string;
+  body: string;
+  createdAt: string;
+  readBy: string[];
+};
+
+// Campanha de remarketing. O público sai sempre das conversas existentes —
+// o backend recusa qualquer destino que não tenha conversa no CRM.
+export type CampaignStatus = "rascunho" | "rodando" | "pausada" | "finalizada" | "cancelada";
+
+export type Campaign = {
+  id: string;
+  name: string;
+  message: string;
+  status: CampaignStatus;
+  throttleMs: number;
+  total: number;
+  sent: number;
+  failed: number;
+  replied: number;
+  createdBy: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  lastSentAt: string | null;
+};
+
+export type CampaignTarget = {
+  id: string;
+  campaignId: string;
+  conversationId: string;
+  instanceId: string;
+  chatId: string;
+  customer: string;
+  whatsappName: string;
+  phone: string;
+  status: "pendente" | "enviado" | "falhou";
+  createdAt: string;
+  sentAt: string | null;
+  messageId: string | null;
+  repliedAt: string | null;
+  error: string | null;
+};
+
+export type CampaignAudienceFilters = {
+  instanceIds?: string[];
+  inactiveDays?: number;
+  onlyClientLast?: boolean;
+  onlyUnread?: boolean;
+  limit?: number;
+};
+
+export type CampaignPreview = {
+  total: number;
+  sample: Array<{ id: string; instanceId: string; chatId: string; customer: string; whatsappName?: string; phone: string; lastInteraction: string }>;
+  ignored: number;
+};
+
 export type UserRecord = {
   id: string;
   name: string;
@@ -208,6 +284,78 @@ export const whatsappApi = {
     const qs = instanceId ? `?instanceId=${encodeURIComponent(instanceId)}` : "";
     return request<WAConversation[]>(`/api/conversations${qs}`);
   },
+  /** Conversas arquivadas (soft delete). Só admin consegue arquivar/restaurar. */
+  listArchivedConversations: () =>
+    request<WAConversation[]>("/api/conversations?archived=true"),
+  archiveConversation: (conversationId: string) =>
+    request<{ conversation: WAConversation }>(`/api/conversations/${encodeURIComponent(conversationId)}`, {
+      method: "DELETE",
+    }),
+  restoreConversation: (conversationId: string) =>
+    request<{ conversation: WAConversation }>(`/api/conversations/${encodeURIComponent(conversationId)}/restore`, {
+      method: "POST",
+    }),
+
+  // --- Chat interno da equipe ---
+  listInternalThreads: () => request<InternalThread[]>("/api/internal-chat/threads"),
+  internalUnreadCount: () => request<{ count: number }>("/api/internal-chat/unread-count"),
+  openInternalDm: (userId: string) =>
+    request<InternalThread>("/api/internal-chat/threads/dm", {
+      method: "POST",
+      body: JSON.stringify({ userId }),
+    }),
+  createInternalGroup: (payload: { name: string; memberIds: string[] }) =>
+    request<InternalThread>("/api/internal-chat/threads/group", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateInternalGroup: (threadId: string, patch: { name?: string; memberIds?: string[] }) =>
+    request<InternalThread>(`/api/internal-chat/threads/${encodeURIComponent(threadId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  leaveInternalGroup: (threadId: string) =>
+    request<{ ok: true; removed: boolean }>(`/api/internal-chat/threads/${encodeURIComponent(threadId)}/leave`, {
+      method: "POST",
+    }),
+  listInternalMessages: (threadId: string, opts?: { before?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.before) params.set("before", opts.before);
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    return request<InternalMessage[]>(`/api/internal-chat/threads/${encodeURIComponent(threadId)}/messages${qs}`);
+  },
+  sendInternalMessage: (threadId: string, body: string) =>
+    request<InternalMessage>(`/api/internal-chat/threads/${encodeURIComponent(threadId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    }),
+  markInternalThreadRead: (threadId: string) =>
+    request<{ ok: true; marked: number }>(`/api/internal-chat/threads/${encodeURIComponent(threadId)}/read`, {
+      method: "POST",
+    }),
+
+  // --- Campanhas de remarketing ---
+  listCampaigns: () => request<Campaign[]>("/api/campaigns"),
+  campaignLimits: () => request<{ minThrottleMs: number; defaultThrottleMs: number }>("/api/campaigns/limits"),
+  previewCampaignAudience: (payload: CampaignAudienceFilters & { conversationIds?: string[] }) =>
+    request<CampaignPreview>("/api/campaigns/preview", { method: "POST", body: JSON.stringify(payload) }),
+  createCampaign: (payload: CampaignAudienceFilters & {
+    name: string;
+    message: string;
+    throttleMs?: number;
+    conversationIds?: string[];
+  }) => request<Campaign>("/api/campaigns", { method: "POST", body: JSON.stringify(payload) }),
+  listCampaignTargets: (campaignId: string) =>
+    request<CampaignTarget[]>(`/api/campaigns/${encodeURIComponent(campaignId)}/targets`),
+  startCampaign: (campaignId: string) =>
+    request<Campaign>(`/api/campaigns/${encodeURIComponent(campaignId)}/start`, { method: "POST" }),
+  pauseCampaign: (campaignId: string) =>
+    request<Campaign>(`/api/campaigns/${encodeURIComponent(campaignId)}/pause`, { method: "POST" }),
+  cancelCampaign: (campaignId: string) =>
+    request<Campaign>(`/api/campaigns/${encodeURIComponent(campaignId)}/cancel`, { method: "POST" }),
+  deleteCampaign: (campaignId: string) =>
+    request<void>(`/api/campaigns/${encodeURIComponent(campaignId)}`, { method: "DELETE" }),
   getMessages: (conversationId: string, opts?: { before?: number; limit?: number }) => {
     const params = new URLSearchParams();
     if (opts?.before) params.set("before", String(opts.before));

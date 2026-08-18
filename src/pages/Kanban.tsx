@@ -13,7 +13,7 @@ import { NewDealModal } from "@/components/kanban/NewDealModal";
 import { StageManagerDialog } from "@/components/kanban/StageManagerDialog";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, Plus, Settings2 } from "lucide-react";
+import { ChevronDown, Plus, Search, Settings2, X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,6 +37,9 @@ export default function Kanban() {
   const [filterTemperature, setFilterTemperature] = useState(searchParams.get("temp") || "all");
   const [filterStart, setFilterStart] = useState("");
   const [filterEnd, setFilterEnd] = useState("");
+  // Busca por cliente — disponível para todos, não só admin, e independente
+  // dos filtros do funil.
+  const [search, setSearch] = useState("");
   const selectedDeal = selected ? deals.find(deal => deal.id === selected.id) || selected : null;
   const openDealId = searchParams.get("deal");
   const sellerOptions = useMemo(() => teamUsers.filter(user => user.active && user.role !== "Administrador"), [teamUsers]);
@@ -68,11 +71,22 @@ export default function Kanban() {
   const visibleDeals = useMemo(() => {
     const start = filterStart ? new Date(`${filterStart}T00:00:00`).getTime() : null;
     const end = filterEnd ? new Date(`${filterEnd}T23:59:59`).getTime() : null;
+    const term = search.toLowerCase().trim();
+    // Só dígitos: deixa achar "11 98765" digitando "1198765".
+    const digits = term.replace(/\D/g, "");
 
     return deals.filter(deal => {
       const interaction = new Date(deal.lastInteraction).getTime();
       const responsibleIds = [deal.sellerId, ...(deal.assignedSellerIds || [])];
+      const matchesSearch = !term
+        || deal.customer.toLowerCase().includes(term)
+        || deal.phone.toLowerCase().includes(term)
+        || (digits.length >= 3 && deal.phone.replace(/\D/g, "").includes(digits))
+        || deal.tags.some(tag => tag.toLowerCase().includes(term))
+        || (deal.interest || "").toLowerCase().includes(term)
+        || (deal.notes || "").toLowerCase().includes(term);
       return canViewDeal(deal)
+        && matchesSearch
         && (!isAdmin || filterSellerIds.length === 0 || filterSellerIds.some(id => responsibleIds.includes(id)))
         && (!isAdmin || filterTags.length === 0 || filterTags.some(tag => deal.tags.includes(tag)))
         && (!isAdmin || filterWaiting === "all" || (filterWaiting === "cliente-aguardando" ? deal.unread : !deal.unread))
@@ -80,7 +94,7 @@ export default function Kanban() {
         && (!isAdmin || !start || interaction >= start)
         && (!isAdmin || !end || interaction <= end);
     });
-  }, [canViewDeal, deals, filterEnd, filterSellerIds, filterStart, filterTags, filterTemperature, filterWaiting, isAdmin]);
+  }, [canViewDeal, deals, filterEnd, filterSellerIds, filterStart, filterTags, filterTemperature, filterWaiting, isAdmin, search]);
 
   const grouped = useMemo(() => {
     const map = new Map<DealStage, Deal[]>();
@@ -179,8 +193,31 @@ export default function Kanban() {
 
   return (
     <AppLayout title="Kanban Comercial" subtitle="Arraste os cards entre as colunas">
-      <div className="flex items-center justify-between mb-4">
-        <div className="text-sm text-muted-foreground">{visibleDeals.length} conversas no funil</div>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="relative w-full max-w-xs">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={event => setSearch(event.target.value)}
+              placeholder="Buscar cliente..."
+              className="border-transparent bg-secondary pl-9 pr-8"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                title="Limpar busca"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          <div className="shrink-0 text-sm text-muted-foreground">
+            {visibleDeals.length} {visibleDeals.length === 1 ? "conversa" : "conversas"} no funil
+          </div>
+        </div>
         <div className="flex items-center gap-2">
           {isAdmin && (
             <>

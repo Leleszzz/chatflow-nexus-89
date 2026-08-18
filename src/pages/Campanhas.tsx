@@ -1,463 +1,456 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { AlertTriangle, Ban, Download, MessageSquareText, Pause, Play, RefreshCw, Send, Trash2, Users } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useCRM } from "@/store/crm-store";
+import { useInstances } from "@/hooks/useInstances";
+import { getSocket } from "@/lib/whatsapp-socket";
+import { Campaign, CampaignPreview, whatsappApi } from "@/lib/whatsapp-api";
+import { renderTemplate, TEMPLATE_VARIABLES, variaveisDesconhecidas } from "@/lib/message-template";
+import { csvNumber, downloadCsv } from "@/lib/csv";
 import { cn } from "@/lib/utils";
-import { downloadCsv } from "@/lib/csv";
-import { BadgeCheck, Download, MessageSquareText, Pause, Play, RotateCcw, Search, Send, Square, X } from "lucide-react";
-import { toast } from "sonner";
 
-type CampaignStatus = "rascunho" | "aguardando-revisao" | "agendada" | "rodando" | "pausada" | "finalizada" | "erro";
+// Só as variáveis que uma campanha consegue preencher: não há lista importada
+// nem conversa aberta no momento do disparo.
+const CAMPAIGN_VARIABLES = TEMPLATE_VARIABLES.filter(v =>
+  ["nome", "primeiro_nome", "nome_whatsapp", "telefone", "saudacao", "atendente"].includes(v.chave));
 
-type CampaignSummary = {
-  id: string;
-  name: string;
-  audience: number;
-  sent: number;
-  responses: number;
-  status: CampaignStatus;
-  createdAt: string;
-  message: string;
-  reportRows: CampaignReportRow[];
+const STATUS_LABEL: Record<Campaign["status"], string> = {
+  rascunho: "Rascunho",
+  rodando: "Enviando",
+  pausada: "Pausada",
+  finalizada: "Finalizada",
+  cancelada: "Cancelada",
 };
 
-type CampaignReportRow = {
-  name: string;
-  phone: string;
-  origin: string;
-  status: string;
+const STATUS_CLASS: Record<Campaign["status"], string> = {
+  rascunho: "bg-muted text-muted-foreground",
+  rodando: "bg-success-soft text-success",
+  pausada: "bg-warning-soft text-warning",
+  finalizada: "bg-muted text-muted-foreground",
+  cancelada: "bg-destructive-soft text-destructive",
 };
 
-const runningCampaigns: CampaignSummary[] = [
-  { id: "c1", name: "Retorno leads quentes", audience: 64, sent: 42, responses: 13, status: "aguardando-revisao", createdAt: "2026-04-30T09:10:00", message: "Retorno para leads quentes", reportRows: [] },
-  { id: "c2", name: "Orcamento sem resposta", audience: 38, sent: 38, responses: 7, status: "pausada", createdAt: "2026-04-29T15:20:00", message: "Follow-up de orcamento", reportRows: [] },
-];
+const formatDateTime = (iso: string) =>
+  new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
 
-const previousCampaigns: CampaignSummary[] = [
-  { id: "c3", name: "Reativacao Instagram", audience: 120, sent: 120, responses: 31, status: "finalizada", createdAt: "2026-04-26T11:00:00", message: "Reativacao de Instagram", reportRows: [] },
-  { id: "c4", name: "Clientes frios 30 dias", audience: 86, sent: 86, responses: 14, status: "finalizada", createdAt: "2026-04-22T10:30:00", message: "Clientes frios 30 dias", reportRows: [] },
-  { id: "c5", name: "Follow-up pos proposta", audience: 52, sent: 52, responses: 18, status: "finalizada", createdAt: "2026-04-18T16:40:00", message: "Follow-up pos proposta", reportRows: [] },
-];
-
-const syntaxOptions = [
-  { label: "Nome do cliente", token: "{{nome_cliente}}" },
-  { label: "Numero", token: "{{numero_cliente}}" },
-];
-
-const daysSince = (value: string) => {
-  const time = new Date(value).getTime();
-  if (Number.isNaN(time)) return 0;
-  return Math.floor((Date.now() - time) / 86400000);
+/** Estimativa de duração: nº de pendentes × intervalo entre envios. */
+const estimateDuration = (pending: number, throttleMs: number) => {
+  const totalMin = Math.round((pending * throttleMs) / 60000);
+  if (totalMin < 1) return "menos de 1 min";
+  if (totalMin < 60) return `~${totalMin} min`;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return m ? `~${h}h${String(m).padStart(2, "0")}` : `~${h}h`;
 };
-
-const responseRate = (campaign: CampaignSummary) =>
-  campaign.sent ? Math.round((campaign.responses / campaign.sent) * 100) : 0;
-
-const buildFallbackReportRows = (campaign: CampaignSummary): CampaignReportRow[] =>
-  Array.from({ length: Math.min(campaign.audience, 12) }, (_, index) => ({
-    name: `Contato ${index + 1}`,
-    phone: `+55 11 9${String(index + 1).padStart(4, "0")}-${String(1000 + index).padStart(4, "0")}`,
-    origin: campaign.name,
-    status: index < campaign.responses ? "respondeu" : "enviado",
-  }));
-
-const renderPreview = (message: string, deal?: { customer: string; phone: string }) =>
-  message
-    .replaceAll("{{nome_cliente}}", deal?.customer || "Marina Souza")
-    .replaceAll("{{numero_cliente}}", deal?.phone || "+55 11 99999-0000");
-
-function CampaignList({
-  title,
-  items,
-  mode,
-  onTogglePause,
-  onStop,
-  onDownload,
-  onRedo,
-}: {
-  title: string;
-  items: CampaignSummary[];
-  mode: "running" | "previous";
-  onTogglePause?: (campaignId: string) => void;
-  onStop?: (campaignId: string) => void;
-  onDownload?: (campaign: CampaignSummary) => void;
-  onRedo?: (campaign: CampaignSummary) => void;
-}) {
-  return (
-    <section className="card-elevated p-5">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="font-display text-base font-bold">{title}</h2>
-        <span className="rounded-full bg-secondary px-2 py-1 text-[10px] font-semibold text-muted-foreground">{items.length}</span>
-      </div>
-      <div className="space-y-3">
-        {items.map(campaign => {
-          const rate = responseRate(campaign);
-          return (
-            <div key={campaign.id} className="rounded-xl border border-border/60 bg-background p-4">
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold">{campaign.name}</div>
-                  <div className="text-xs text-muted-foreground">{campaign.sent}/{campaign.audience} envios</div>
-                </div>
-                <span className={cn(
-                  "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold",
-                  campaign.status === "rascunho" && "bg-muted text-muted-foreground",
-                  campaign.status === "aguardando-revisao" && "bg-warning-soft text-warning",
-                  campaign.status === "agendada" && "bg-info-soft text-info",
-                  campaign.status === "rodando" && "bg-success-soft text-success",
-                  campaign.status === "pausada" && "bg-warning-soft text-warning",
-                  campaign.status === "finalizada" && "bg-muted text-muted-foreground",
-                  campaign.status === "erro" && "bg-destructive-soft text-destructive",
-                )}>
-                  {campaign.status.replaceAll("-", " ")}
-                </span>
-              </div>
-              <div className="mb-2 flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">Taxa de resposta</span>
-                <span className="font-semibold">{rate}%</span>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-secondary">
-                <div className="h-full rounded-full bg-primary" style={{ width: `${rate}%` }} />
-              </div>
-              <div className="mt-4 flex flex-wrap gap-2">
-                {mode === "running" ? (
-                  <>
-                    <Button variant="outline" size="sm" className="gap-2" onClick={() => onTogglePause?.(campaign.id)}>
-                      {campaign.status === "pausada" ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-                      {campaign.status === "pausada" ? "Reativar" : "Pausar"}
-                    </Button>
-                    <Button variant="outline" size="sm" className="gap-2" onClick={() => onStop?.(campaign.id)}>
-                      <Square className="h-4 w-4" /> Parar
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <Button variant="outline" size="sm" className="gap-2" onClick={() => onDownload?.(campaign)}>
-                      <Download className="h-4 w-4" /> Ver relatório
-                    </Button>
-                    <Button variant="outline" size="sm" className="gap-2" onClick={() => onRedo?.(campaign)}>
-                      <RotateCcw className="h-4 w-4" /> Refazer
-                    </Button>
-                  </>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
 
 export default function Campanhas() {
-  const { deals, tags, teamUsers, canViewDeal } = useCRM();
-  const [activeCampaigns, setActiveCampaigns] = useState<CampaignSummary[]>(runningCampaigns);
-  const [closedCampaigns, setClosedCampaigns] = useState<CampaignSummary[]>(previousCampaigns);
-  const [name, setName] = useState("Remarketing sem resposta");
-  const [selectedSellerIds, setSelectedSellerIds] = useState<string[]>([]);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [clientFilter, setClientFilter] = useState("all");
-  const [temperature, setTemperature] = useState("all");
-  const [lastContact, setLastContact] = useState("all");
-  const [returnStatus, setReturnStatus] = useState("all");
-  const [message, setMessage] = useState("Oi {{nome_cliente}}, tudo bem? Vi que nosso ultimo contato ficou em aberto e queria saber se ainda posso te ajudar pelo WhatsApp {{numero_cliente}}.");
-  const [selectedDealIds, setSelectedDealIds] = useState<string[]>([]);
-  const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
-  const [customerPickerSearch, setCustomerPickerSearch] = useState("");
+  const { currentUser, isAdmin } = useCRM();
+  const { instances } = useInstances();
 
-  const sellerOptions = useMemo(() => teamUsers.filter(user => user.active && user.role !== "Administrador"), [teamUsers]);
-  const manualSelectionActive = selectedDealIds.length > 0;
-  const audience = useMemo(() => deals.filter(deal => {
-    const days = daysSince(deal.lastInteraction);
-    if (!canViewDeal(deal)) return false;
-    if (manualSelectionActive) return selectedDealIds.includes(deal.id);
-    return (selectedSellerIds.length === 0 || selectedSellerIds.includes(deal.sellerId))
-      && (selectedTags.length === 0 || selectedTags.some(tag => deal.tags.includes(tag)))
-      && (clientFilter === "all"
-        || (clientFilter === "retornar-hoje" && deal.tags.includes("Retornar hoje"))
-        || (clientFilter === "sem-resposta" && deal.stage === "aguardando-resposta")
-        || (clientFilter === "proposta-pendente" && deal.tags.includes("Enviar proposta"))
-        || (clientFilter === "nao-lidos" && deal.unread))
-      && (temperature === "all" || deal.temperature === temperature)
-      && (returnStatus === "all" || (returnStatus === "cliente-aguardando" ? deal.unread : !deal.unread))
-      && (lastContact === "all"
-        || (lastContact === "7d" && days >= 7)
-        || (lastContact === "15d" && days >= 15)
-        || (lastContact === "30d" && days >= 30));
-  }), [canViewDeal, clientFilter, deals, lastContact, manualSelectionActive, returnStatus, selectedDealIds, selectedSellerIds, selectedTags, temperature]);
-  const totalAudience = audience.length;
-  const previewDeal = audience[0];
-  const customerPickerDeals = useMemo(() => {
-    const term = customerPickerSearch.toLowerCase().trim();
-    return deals.filter(deal => canViewDeal(deal) && (!term || [deal.customer, deal.phone, deal.tags.join(" ")].join(" ").toLowerCase().includes(term)));
-  }, [canViewDeal, customerPickerSearch, deals]);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
 
-  const toggleSeller = (sellerId: string) => {
-    setSelectedSellerIds(current => current.includes(sellerId) ? current.filter(id => id !== sellerId) : [...current, sellerId]);
+  const [name, setName] = useState("");
+  const [message, setMessage] = useState(
+    "{{saudacao}}, {{primeiro_nome}}! Tudo bem? Passando para saber se ainda posso te ajudar por aqui.",
+  );
+  const [instanceIds, setInstanceIds] = useState<string[]>([]);
+  const [inactiveDays, setInactiveDays] = useState("7");
+  const [onlyClientLast, setOnlyClientLast] = useState(false);
+  const [onlyUnread, setOnlyUnread] = useState(false);
+  const [throttleSec, setThrottleSec] = useState("40");
+  const [minThrottleMs, setMinThrottleMs] = useState(15000);
+
+  const [preview, setPreview] = useState<CampaignPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setCampaigns(await whatsappApi.listCampaigns());
+    } catch (err) {
+      toast.error(`Não foi possível carregar as campanhas: ${err instanceof Error ? err.message : "erro"}`);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  useEffect(() => {
+    whatsappApi.campaignLimits()
+      .then(l => { setMinThrottleMs(l.minThrottleMs); setThrottleSec(String(Math.round(l.defaultThrottleMs / 1000))); })
+      .catch(() => { /* mantém o default local */ });
+  }, []);
+
+  // O worker envia em segundo plano; sem isto a tela ficaria congelada durante
+  // uma campanha que leva horas.
+  useEffect(() => {
+    const socket = getSocket();
+    const onUpdate = () => refresh();
+    socket.on("campaign:update", onUpdate);
+    return () => { socket.off("campaign:update", onUpdate); };
+  }, [refresh]);
+
+  const unknownVars = useMemo(() => variaveisDesconhecidas(message), [message]);
+  const throttleMs = Math.max(Number(throttleSec) * 1000 || 0, minThrottleMs);
+
+  const previewContext = {
+    nome: preview?.sample[0]?.customer || "Maria Souza",
+    nomeWhatsapp: preview?.sample[0]?.whatsappName || "Maria",
+    telefone: preview?.sample[0]?.phone || "+55 11 99999-0000",
+    atendente: currentUser?.name || "",
   };
 
-  const toggleTag = (tag: string) => {
-    setSelectedTags(current => current.includes(tag) ? current.filter(item => item !== tag) : [...current, tag]);
+  const audienceFilters = () => ({
+    instanceIds,
+    inactiveDays: Number(inactiveDays) || 0,
+    onlyClientLast,
+    onlyUnread,
+  });
+
+  const runPreview = async () => {
+    setPreviewing(true);
+    try {
+      setPreview(await whatsappApi.previewCampaignAudience(audienceFilters()));
+    } catch (err) {
+      toast.error(`Falha ao simular o público: ${err instanceof Error ? err.message : "erro"}`);
+    } finally {
+      setPreviewing(false);
+    }
   };
 
-  const toggleManualDeal = (dealId: string) => {
-    setSelectedDealIds(current => current.includes(dealId) ? current.filter(id => id !== dealId) : [...current, dealId]);
+  const create = async (andStart: boolean) => {
+    if (!name.trim()) return toast.error("Dê um nome à campanha");
+    if (!message.trim()) return toast.error("Escreva a mensagem");
+    if (unknownVars.length) return toast.error(`Variável desconhecida: {{${unknownVars[0]}}}`);
+    if (!preview || preview.total === 0) return toast.error("Simule o público antes — está vazio ou não foi calculado");
+
+    setBusy(true);
+    try {
+      const campaign = await whatsappApi.createCampaign({
+        name: name.trim(),
+        message: message.trim(),
+        throttleMs,
+        ...audienceFilters(),
+      });
+      if (andStart) await whatsappApi.startCampaign(campaign.id);
+      await refresh();
+      setName("");
+      setPreview(null);
+      toast.success(andStart
+        ? `Campanha "${campaign.name}" iniciada para ${campaign.total} contatos`
+        : `Campanha "${campaign.name}" criada como rascunho`);
+    } catch (err) {
+      toast.error(`Não foi possível criar: ${err instanceof Error ? err.message : "erro"}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const insertToken = (token: string) => {
-    setMessage(current => `${current}${current.endsWith(" ") || !current ? "" : " "}${token}`);
+  const act = async (fn: () => Promise<unknown>, ok: string) => {
+    setBusy(true);
+    try {
+      await fn();
+      await refresh();
+      toast.success(ok);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "erro");
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const createCampaign = () => {
-    if (!name.trim()) return toast.error("Informe o nome da campanha");
-    if (!message.trim()) return toast.error("Informe a mensagem da campanha");
-    if (totalAudience === 0) return toast.error("Nenhum lead encontrado para a seleção atual");
-    const reportRows: CampaignReportRow[] = [
-      ...audience.map(deal => ({
-        name: deal.customer,
-        phone: deal.phone,
-        origin: manualSelectionActive ? "Seleção manual" : "Filtro CRM",
-        status: "pendente",
-      })),
-    ];
-    setActiveCampaigns(current => [{
-      id: `c-${Date.now()}`,
-      name: name.trim(),
-      audience: totalAudience,
-      sent: 0,
-      responses: 0,
-      status: "aguardando-revisao",
-      createdAt: new Date().toISOString(),
-      message: message.trim(),
-      reportRows,
-    }, ...current]);
-    toast.success("Campanha criada e aguardando revisão");
+  const removeCampaign = (campaign: Campaign) => {
+    if (!window.confirm(`Excluir a campanha "${campaign.name}"? O histórico de envios vai junto.`)) return;
+    act(() => whatsappApi.deleteCampaign(campaign.id), "Campanha excluída");
   };
 
-  const toggleCampaignPause = (campaignId: string) => {
-    setActiveCampaigns(current => current.map(campaign =>
-      campaign.id === campaignId
-        ? { ...campaign, status: campaign.status === "pausada" ? "rodando" : "pausada" }
-        : campaign
-    ));
+  // Relatório com os destinatários reais — sem nenhum dado inventado.
+  const downloadReport = async (campaign: Campaign) => {
+    try {
+      const targets = await whatsappApi.listCampaignTargets(campaign.id);
+      if (!targets.length) return toast.error("Esta campanha não tem contatos");
+      const header = ["Cliente", "Telefone", "Status", "Enviado em", "Respondeu em", "Erro"];
+      const rows = targets.map(t => [
+        t.customer,
+        t.phone,
+        t.status,
+        t.sentAt ? formatDateTime(t.sentAt) : "",
+        t.repliedAt ? formatDateTime(t.repliedAt) : "",
+        t.error || "",
+      ]);
+      const resumo = [
+        [],
+        ["Campanha", campaign.name],
+        ["Criada em", formatDateTime(campaign.createdAt)],
+        ["Público", campaign.total],
+        ["Enviadas", campaign.sent],
+        ["Falhas", campaign.failed],
+        ["Respostas", campaign.replied],
+        ["Taxa de resposta (%)", campaign.sent ? csvNumber((campaign.replied / campaign.sent) * 100, 1) : "0,0"],
+      ];
+      const slug = campaign.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+      downloadCsv(`campanha-${slug}.csv`, [header, ...rows, ...resumo]);
+      toast.success(`${targets.length} contatos exportados`);
+    } catch (err) {
+      toast.error(`Falha ao exportar: ${err instanceof Error ? err.message : "erro"}`);
+    }
   };
 
-  const stopCampaign = (campaignId: string) => {
-    const campaign = activeCampaigns.find(item => item.id === campaignId);
-    if (!campaign) return;
-    setActiveCampaigns(current => current.filter(item => item.id !== campaignId));
-    setClosedCampaigns(current => [{ ...campaign, status: "finalizada" }, ...current]);
-    toast.success("Campanha parada e movida para anteriores");
-  };
-
-  const downloadCampaignReport = (campaign: CampaignSummary) => {
-    const rows = campaign.reportRows.length ? campaign.reportRows : buildFallbackReportRows(campaign);
-    downloadCsv(`relatorio-${campaign.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.csv`, [
-      ["campanha", "criada_em", "publico", "enviados", "respostas", "nome", "telefone", "origem", "status"],
-      ...rows.map(row => [
-        campaign.name,
-        new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(campaign.createdAt)),
-        campaign.audience,
-        campaign.sent,
-        campaign.responses,
-        row.name,
-        row.phone,
-        row.origin,
-        row.status,
-      ]),
-    ]);
-  };
-
-  const redoCampaign = (campaign: CampaignSummary) => {
-    setName(campaign.name);
-    setMessage(campaign.message);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    toast.success("Campanha carregada para refazer");
-  };
+  if (!isAdmin) {
+    return (
+      <AppLayout title="Campanhas" subtitle="Acesso restrito">
+        <div className="card-elevated p-6 text-sm text-muted-foreground">
+          Apenas administradores podem criar e disparar campanhas de remarketing.
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
-    <AppLayout title="Campanhas" subtitle="Crie listas de remarketing e acompanhe respostas">
+    <AppLayout title="Campanhas" subtitle="Remarketing para clientes que já falaram com você">
       <section className="card-elevated mb-6 p-6">
-        <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h2 className="font-display text-lg font-bold">Nova campanha de remarketing</h2>
-            <p className="text-sm text-muted-foreground">Monte público, revise mensagem, acompanhe taxa de resposta e conversões.</p>
-          </div>
-          <div className="grid grid-cols-3 gap-2 text-center">
-            <div className="rounded-xl bg-secondary px-4 py-3">
-              <div className="text-lg font-bold">{totalAudience}</div>
-              <div className="text-[10px] font-semibold uppercase text-muted-foreground">leads</div>
-            </div>
-            <div className="rounded-xl bg-secondary px-4 py-3">
-              <div className="text-lg font-bold">{selectedTags.length || tags.length}</div>
-              <div className="text-[10px] font-semibold uppercase text-muted-foreground">tags</div>
-            </div>
-            <div className="rounded-xl bg-secondary px-4 py-3">
-              <div className="text-lg font-bold">{activeCampaigns.filter(item => item.status === "aguardando-revisao").length}</div>
-              <div className="text-[10px] font-semibold uppercase text-muted-foreground">revisão</div>
-            </div>
-          </div>
+        <div className="mb-5">
+          <h2 className="font-display text-lg font-bold">Nova campanha de remarketing</h2>
+          <p className="text-sm text-muted-foreground">
+            O público sai das conversas que já existem no CRM. Não é possível enviar para quem nunca falou com você.
+          </p>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-          <div className="space-y-5">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_1fr]">
+          <div className="space-y-4">
             <div>
-              <Label>Nome da campanha</Label>
-              <Input value={name} onChange={event => setName(event.target.value)} />
+              <Label htmlFor="cmp-name">Nome da campanha</Label>
+              <Input id="cmp-name" value={name} onChange={e => setName(e.target.value)} placeholder="Ex: Retomada de orçamentos" />
             </div>
 
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              <div>
-                <Label>Clientes selecionados</Label>
-                <div className="flex gap-2">
-                  <Button type="button" variant="outline" className="flex-1 justify-between" onClick={() => setCustomerPickerOpen(true)}>
-                    {manualSelectionActive ? `${selectedDealIds.length} selecionados` : "Selecionar cliente por cliente"}
-                    <Search className="h-4 w-4 text-muted-foreground" />
-                  </Button>
-                  {manualSelectionActive && (
-                    <Button type="button" variant="outline" size="icon" onClick={() => setSelectedDealIds([])} title="Remover seleção manual">
-                      <X className="h-4 w-4" />
-                    </Button>
+            <div className="rounded-xl border border-border/70 p-4">
+              <div className="mb-3 text-sm font-semibold">Quem vai receber</div>
+              <div className="space-y-3">
+                <div>
+                  <Label className="text-xs">Sem contato há</Label>
+                  <Select value={inactiveDays} onValueChange={v => { setInactiveDays(v); setPreview(null); }}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">Qualquer período</SelectItem>
+                      <SelectItem value="3">3 dias ou mais</SelectItem>
+                      <SelectItem value="7">7 dias ou mais</SelectItem>
+                      <SelectItem value="15">15 dias ou mais</SelectItem>
+                      <SelectItem value="30">30 dias ou mais</SelectItem>
+                      <SelectItem value="60">60 dias ou mais</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {instances.length > 1 && (
+                  <div>
+                    <Label className="text-xs">Instâncias</Label>
+                    <div className="mt-1 max-h-32 space-y-0.5 overflow-y-auto rounded-lg border border-border p-1">
+                      {instances.map(inst => (
+                        <label key={inst.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-secondary">
+                          <Checkbox
+                            checked={instanceIds.includes(inst.id)}
+                            onCheckedChange={() => {
+                              setInstanceIds(cur => cur.includes(inst.id) ? cur.filter(i => i !== inst.id) : [...cur, inst.id]);
+                              setPreview(null);
+                            }}
+                          />
+                          <span className="truncate">{inst.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="mt-1 text-[11px] text-muted-foreground">Nenhuma marcada = todas.</p>
+                  </div>
+                )}
+
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <Checkbox checked={onlyClientLast} onCheckedChange={() => { setOnlyClientLast(v => !v); setPreview(null); }} />
+                  Só quem falou por último (ficou sem resposta)
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <Checkbox checked={onlyUnread} onCheckedChange={() => { setOnlyUnread(v => !v); setPreview(null); }} />
+                  Só conversas não lidas
+                </label>
+              </div>
+
+              <Button variant="outline" className="mt-3 w-full gap-2" onClick={runPreview} disabled={previewing}>
+                {previewing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
+                Simular público
+              </Button>
+
+              {preview && (
+                <div className="mt-3 rounded-lg bg-secondary p-3 text-sm">
+                  <div className="font-semibold">
+                    {preview.total} {preview.total === 1 ? "contato" : "contatos"}
+                  </div>
+                  {preview.total > 0 && (
+                    <>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Duração estimada: {estimateDuration(preview.total, throttleMs)}
+                      </div>
+                      <div className="mt-2 space-y-0.5 text-xs text-muted-foreground">
+                        {preview.sample.slice(0, 5).map(c => (
+                          <div key={c.id} className="truncate">· {c.customer} — {c.phone}</div>
+                        ))}
+                        {preview.total > 5 && <div>· e mais {preview.total - 5}...</div>}
+                      </div>
+                    </>
                   )}
                 </div>
-              </div>
-              <div>
-                <Label>Periodo do ultimo contato</Label>
-                <Select value={lastContact} onValueChange={setLastContact} disabled={manualSelectionActive}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Qualquer periodo</SelectItem>
-                    <SelectItem value="7d">Ha 7 dias ou mais</SelectItem>
-                    <SelectItem value="15d">Ha 15 dias ou mais</SelectItem>
-                    <SelectItem value="30d">Ha 30 dias ou mais</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Temperatura</Label>
-                <Select value={temperature} onValueChange={setTemperature} disabled={manualSelectionActive}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Todas</SelectItem>
-                    <SelectItem value="quente">Quente</SelectItem>
-                    <SelectItem value="morno">Morno</SelectItem>
-                    <SelectItem value="frio">Frio</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Retorno</Label>
-                <Select value={returnStatus} onValueChange={setReturnStatus} disabled={manualSelectionActive}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Todos</SelectItem>
-                    <SelectItem value="cliente-aguardando">Cliente aguardando</SelectItem>
-                    <SelectItem value="aguardando-cliente">Aguardando cliente</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              )}
             </div>
 
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <Label>Vendedores</Label>
-                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" disabled={manualSelectionActive} onClick={() => setSelectedSellerIds([])}>Todos</Button>
-                </div>
-                <div className="max-h-44 overflow-y-auto rounded-xl border border-border/70 bg-background p-2">
-                  {sellerOptions.map(seller => (
-                    <label key={seller.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-secondary">
-                      <Checkbox disabled={manualSelectionActive} checked={selectedSellerIds.includes(seller.id)} onCheckedChange={() => toggleSeller(seller.id)} />
-                      <span className="truncate">{seller.name}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <Label>Tags</Label>
-                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" disabled={manualSelectionActive} onClick={() => setSelectedTags([])}>Todas</Button>
-                </div>
-                <div className="max-h-44 overflow-y-auto rounded-xl border border-border/70 bg-background p-2">
-                  {tags.map(tag => (
-                    <label key={tag} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-secondary">
-                      <Checkbox disabled={manualSelectionActive} checked={selectedTags.includes(tag)} onCheckedChange={() => toggleTag(tag)} />
-                      <span className="truncate">{tag}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
+            <div>
+              <Label htmlFor="cmp-throttle">Intervalo entre envios (segundos)</Label>
+              <Input
+                id="cmp-throttle"
+                type="number"
+                min={Math.round(minThrottleMs / 1000)}
+                value={throttleSec}
+                onChange={e => setThrottleSec(e.target.value)}
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Mínimo {Math.round(minThrottleMs / 1000)}s. Enviar rápido demais aumenta muito o risco de o número ser bloqueado pelo WhatsApp.
+              </p>
             </div>
           </div>
 
           <div className="space-y-4">
             <div>
-              <Label>Mensagem personalizada</Label>
-              <Textarea value={message} onChange={event => setMessage(event.target.value)} rows={8} className="mt-1" />
+              <Label htmlFor="cmp-msg">Mensagem</Label>
+              <Textarea id="cmp-msg" value={message} onChange={e => setMessage(e.target.value)} rows={7} className="mt-1" />
             </div>
-            <div className="flex flex-wrap gap-2">
-              {syntaxOptions.map(option => (
-                <Button key={option.token} type="button" variant="outline" size="sm" className="gap-2" onClick={() => insertToken(option.token)}>
-                  <BadgeCheck className="h-3.5 w-3.5" /> {option.label}
-                </Button>
+
+            <div className="flex flex-wrap gap-1.5">
+              {CAMPAIGN_VARIABLES.map(v => (
+                <button
+                  key={v.chave}
+                  type="button"
+                  title={v.descricao}
+                  onClick={() => setMessage(cur => `${cur}${cur && !cur.endsWith(" ") ? " " : ""}{{${v.chave}}}`)}
+                  className="rounded-md bg-secondary px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                >
+                  {`{{${v.chave}}}`}
+                </button>
               ))}
             </div>
+
+            {unknownVars.length > 0 && (
+              <div className="flex items-start gap-2 rounded-lg bg-destructive-soft p-3 text-xs text-destructive">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>Variável desconhecida: {unknownVars.map(v => `{{${v}}}`).join(", ")}. Ela sairia vazia para o cliente.</span>
+              </div>
+            )}
+
             <div className="rounded-xl bg-secondary p-4">
               <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-muted-foreground">
-                <MessageSquareText className="h-4 w-4" /> Previa da mensagem
+                <MessageSquareText className="h-4 w-4" /> Prévia
               </div>
-              <div className="whitespace-pre-wrap text-sm">{renderPreview(message, previewDeal)}</div>
+              <div className="whitespace-pre-wrap text-sm">{renderTemplate(message, previewContext)}</div>
             </div>
-            <Button className="w-full gap-2 bg-gradient-primary" onClick={createCampaign}>
-              <Send className="h-4 w-4" /> Preparar campanha
-            </Button>
+
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => create(false)} disabled={busy}>
+                Salvar rascunho
+              </Button>
+              <Button className="flex-1 gap-2 bg-gradient-primary" onClick={() => create(true)} disabled={busy}>
+                <Send className="h-4 w-4" /> Criar e iniciar
+              </Button>
+            </div>
           </div>
         </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <CampaignList title="Campanhas rodando atualmente" items={activeCampaigns} mode="running" onTogglePause={toggleCampaignPause} onStop={stopCampaign} />
-        <CampaignList title="Campanhas anteriores" items={closedCampaigns} mode="previous" onDownload={downloadCampaignReport} onRedo={redoCampaign} />
-      </div>
+      <section className="card-elevated p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="font-display text-base font-bold">Campanhas</h2>
+          <Button variant="ghost" size="sm" className="gap-2" onClick={refresh}>
+            <RefreshCw className="h-3.5 w-3.5" /> Atualizar
+          </Button>
+        </div>
 
-      <Dialog open={customerPickerOpen} onOpenChange={setCustomerPickerOpen}>
-        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Selecionar clientes</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input value={customerPickerSearch} onChange={event => setCustomerPickerSearch(event.target.value)} placeholder="Buscar por nome, telefone ou tag" className="pl-9" />
-            </div>
-            <div className="flex items-center justify-between rounded-xl bg-secondary p-3 text-sm">
-              <span>{selectedDealIds.length} clientes selecionados</span>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => setSelectedDealIds(customerPickerDeals.map(deal => deal.id))}>Selecionar visíveis</Button>
-                <Button variant="outline" size="sm" onClick={() => setSelectedDealIds([])}>Limpar</Button>
-              </div>
-            </div>
-            <div className="max-h-[420px] overflow-y-auto rounded-xl border border-border/70 p-2">
-              {customerPickerDeals.map(deal => (
-                <label key={deal.id} className="flex cursor-pointer items-start gap-3 rounded-lg px-2 py-2 text-sm hover:bg-secondary">
-                  <Checkbox checked={selectedDealIds.includes(deal.id)} onCheckedChange={() => toggleManualDeal(deal.id)} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-semibold">{deal.customer}</span>
-                    <span className="block truncate text-xs text-muted-foreground">{deal.phone} · {deal.tags.join(", ")}</span>
+        {loading && <p className="py-6 text-center text-sm text-muted-foreground">Carregando...</p>}
+        {!loading && campaigns.length === 0 && (
+          <p className="py-6 text-center text-sm text-muted-foreground">Nenhuma campanha ainda.</p>
+        )}
+
+        <div className="space-y-3">
+          {campaigns.map(campaign => {
+            const done = campaign.sent + campaign.failed;
+            const progress = campaign.total ? Math.round((done / campaign.total) * 100) : 0;
+            const rate = campaign.sent ? Math.round((campaign.replied / campaign.sent) * 100) : 0;
+            const pending = campaign.total - done;
+            return (
+              <div key={campaign.id} className="rounded-xl border border-border/60 bg-background p-4">
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold">{campaign.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {done}/{campaign.total} processados · {campaign.replied} respostas ({rate}%)
+                      {campaign.failed > 0 && <span className="text-destructive"> · {campaign.failed} falhas</span>}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-muted-foreground">
+                      Criada em {formatDateTime(campaign.createdAt)}
+                      {campaign.status === "rodando" && pending > 0 && ` · restam ${estimateDuration(pending, campaign.throttleMs)}`}
+                    </div>
+                  </div>
+                  <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold", STATUS_CLASS[campaign.status])}>
+                    {STATUS_LABEL[campaign.status]}
                   </span>
-                </label>
-              ))}
-            </div>
-            <Button className="w-full bg-gradient-primary" onClick={() => setCustomerPickerOpen(false)}>Aplicar seleção</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+                </div>
+
+                <div className="h-2 overflow-hidden rounded-full bg-secondary">
+                  <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${progress}%` }} />
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {campaign.status === "rascunho" && (
+                    <Button size="sm" className="gap-2 bg-gradient-primary" disabled={busy}
+                      onClick={() => act(() => whatsappApi.startCampaign(campaign.id), "Campanha iniciada")}>
+                      <Play className="h-3.5 w-3.5" /> Iniciar
+                    </Button>
+                  )}
+                  {campaign.status === "rodando" && (
+                    <Button variant="outline" size="sm" className="gap-2" disabled={busy}
+                      onClick={() => act(() => whatsappApi.pauseCampaign(campaign.id), "Campanha pausada")}>
+                      <Pause className="h-3.5 w-3.5" /> Pausar
+                    </Button>
+                  )}
+                  {campaign.status === "pausada" && (
+                    <Button size="sm" className="gap-2 bg-gradient-primary" disabled={busy}
+                      onClick={() => act(() => whatsappApi.startCampaign(campaign.id), "Campanha retomada")}>
+                      <Play className="h-3.5 w-3.5" /> Retomar
+                    </Button>
+                  )}
+                  {(campaign.status === "rodando" || campaign.status === "pausada") && (
+                    <Button variant="outline" size="sm" className="gap-2 text-muted-foreground hover:text-destructive" disabled={busy}
+                      onClick={() => act(() => whatsappApi.cancelCampaign(campaign.id), "Campanha cancelada")}>
+                      <Ban className="h-3.5 w-3.5" /> Cancelar
+                    </Button>
+                  )}
+                  <Button variant="outline" size="sm" className="gap-2" onClick={() => downloadReport(campaign)}>
+                    <Download className="h-3.5 w-3.5" /> Relatório
+                  </Button>
+                  {campaign.status !== "rodando" && (
+                    <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-destructive" disabled={busy}
+                      onClick={() => removeCampaign(campaign)}>
+                      <Trash2 className="h-3.5 w-3.5" /> Excluir
+                    </Button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
     </AppLayout>
   );
 }
