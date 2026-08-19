@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
 import { decodeAuthToken } from "@/lib/auth-token";
-import { Deal, DealStage, INITIAL_AGENTS, Agent, AgentUsage, ALL_TAGS, STAGES, Stage } from "@/lib/mock-data";
+import { Deal, DealStage, Agent, AgentUsage, ALL_TAGS, STAGES, Stage, CustomField, CustomFieldValues } from "@/lib/mock-data";
 import { setApiAuthToken, whatsappApi, UserRecord, ProntuarioAttachment, ProntuarioCategory } from "@/lib/whatsapp-api";
 import { getSocket, setSocketAuthToken } from "@/lib/whatsapp-socket";
 
@@ -188,7 +188,13 @@ interface CRMCtx {
   finished: FinishedDeal[];
   finishDeal: (f: FinishedDeal) => void;
   agents: Agent[];
-  setAgents: React.Dispatch<React.SetStateAction<Agent[]>>;
+  addAgent: (agent: Partial<Agent>) => Promise<Agent | null>;
+  updateAgentConfig: (id: string, patch: Partial<Agent>) => Promise<void>;
+  removeAgent: (id: string) => Promise<void>;
+  /** Definições dos campos personalizados do lead (schema compartilhado). */
+  customFields: CustomField[];
+  refreshCustomFields: () => Promise<void>;
+  setDealCustomField: (dealId: string, key: string, value: string | number | null) => void;
   agentUsage: Record<string, AgentUsage>;
   refreshAgentUsage: () => Promise<void>;
   resetAgentUsage: (agentId: string) => Promise<void>;
@@ -292,12 +298,10 @@ const normalizeAgent = (raw: Partial<Agent> & { id?: string }): Agent => ({
   fallbackMessage: raw.fallbackMessage,
   objective: raw.objective,
   tone: raw.tone,
+  extractFields: Array.isArray(raw.extractFields) ? raw.extractFields.map(String) : [],
 });
 
-const loadAgents = (): Agent[] => {
-  const stored = loadStored<Partial<Agent>[]>("crm-agents", INITIAL_AGENTS as Partial<Agent>[]);
-  return Array.isArray(stored) ? stored.map(normalizeAgent) : [];
-};
+
 
 const INITIAL_APPOINTMENTS: Appointment[] = [
   {
@@ -360,7 +364,10 @@ const toTeamUser = (record: UserRecord): TeamUser => ({
 export function CRMProvider({ children }: { children: ReactNode }) {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [finished, setFinished] = useState<FinishedDeal[]>([]);
-  const [agents, setAgents] = useState<Agent[]>(() => loadAgents());
+  // Agentes vivem no Mongo (antes era localStorage): a meta de campos precisa
+  // valer para o time inteiro, não só para o navegador que configurou.
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [agentUsage, setAgentUsage] = useState<Record<string, AgentUsage>>({});
   const [tags, setTags] = useState<string[]>(() => loadStored("crm-tags", ALL_TAGS));
   const [stages, setStages] = useState<Stage[]>(STAGES);
@@ -388,10 +395,6 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     window.localStorage.setItem("crm-account-profile", JSON.stringify(accountProfile));
   }, [accountProfile]);
-
-  useEffect(() => {
-    window.localStorage.setItem("crm-agents", JSON.stringify(agents));
-  }, [agents]);
 
   useEffect(() => {
     window.localStorage.setItem("crm-tags", JSON.stringify(tags));
@@ -456,6 +459,24 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       if (Array.isArray(list) && list.length) setStages(list);
     } catch (err) {
       console.warn("[crm-store] listStages failed", err);
+    }
+  }, []);
+
+  const refreshAgents = useCallback(async () => {
+    try {
+      const list = await whatsappApi.listAgents();
+      if (Array.isArray(list)) setAgents(list.map(normalizeAgent));
+    } catch (err) {
+      console.warn("[crm-store] listAgents failed", err);
+    }
+  }, []);
+
+  const refreshCustomFields = useCallback(async () => {
+    try {
+      const list = await whatsappApi.listCustomFields();
+      if (Array.isArray(list)) setCustomFields(list);
+    } catch (err) {
+      console.warn("[crm-store] listCustomFields failed", err);
     }
   }, []);
 
@@ -536,7 +557,9 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     refreshAgentUsage();
     refreshDeals();
     refreshStages();
-  }, [currentUserId, refreshTeamUsers, refreshProntuarios, refreshAgentUsage, refreshDeals, refreshStages]);
+    refreshAgents();
+    refreshCustomFields();
+  }, [currentUserId, refreshTeamUsers, refreshProntuarios, refreshAgentUsage, refreshDeals, refreshStages, refreshAgents, refreshCustomFields]);
 
   // Sincronização em tempo real dos cards/etapas (eventos do backend, já filtrados por permissão).
   useEffect(() => {
@@ -560,15 +583,25 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     const onStages = (payload: { stages: Stage[] }) => {
       if (Array.isArray(payload?.stages) && payload.stages.length) setStages(payload.stages);
     };
+    const onCustomFields = (payload: { customFields: CustomField[] }) => {
+      if (Array.isArray(payload?.customFields)) setCustomFields(payload.customFields);
+    };
+    const onAgents = (payload: { agents: Agent[] }) => {
+      if (Array.isArray(payload?.agents)) setAgents(payload.agents.map(normalizeAgent));
+    };
     socket.on("deal:new", upsertDeal);
     socket.on("deal:update", upsertDeal);
     socket.on("deal:delete", onDealDelete);
     socket.on("stages:update", onStages);
+    socket.on("custom-fields:update", onCustomFields);
+    socket.on("agents:update", onAgents);
     return () => {
       socket.off("deal:new", upsertDeal);
       socket.off("deal:update", upsertDeal);
       socket.off("deal:delete", onDealDelete);
       socket.off("stages:update", onStages);
+      socket.off("custom-fields:update", onCustomFields);
+      socket.off("agents:update", onAgents);
     };
   }, [currentUserId]);
 
@@ -690,6 +723,51 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     whatsappApi.deleteStage(id).catch(err => console.warn("[crm-store] deleteStage failed", err));
     return true;
   };
+  // Agentes e campos personalizados são compartilhados (Mongo). Mutações
+  // persistem e o broadcast reconcilia os demais clientes — mesmo desenho das etapas.
+  const addAgent = async (agent: Partial<Agent>) => {
+    try {
+      const criado = await whatsappApi.createAgent(agent);
+      await refreshAgents();
+      return normalizeAgent(criado);
+    } catch (err) {
+      console.warn("[crm-store] createAgent failed", err);
+      return null;
+    }
+  };
+  const updateAgentConfig = async (id: string, patch: Partial<Agent>) => {
+    setAgents(prev => prev.map(a => (a.id === id ? normalizeAgent({ ...a, ...patch }) : a)));
+    try {
+      await whatsappApi.updateAgentRemote(id, patch);
+    } catch (err) {
+      console.warn("[crm-store] updateAgent failed", err);
+      await refreshAgents();
+    }
+  };
+  const removeAgent = async (id: string) => {
+    setAgents(prev => prev.filter(a => a.id !== id));
+    try {
+      await whatsappApi.deleteAgent(id);
+    } catch (err) {
+      console.warn("[crm-store] deleteAgent failed", err);
+      await refreshAgents();
+    }
+  };
+
+  // Grava UM campo personalizado do lead. O backend mescla em customFields, então
+  // mandar só a chave alterada não apaga os demais valores já coletados.
+  const setDealCustomField = (dealId: string, key: string, value: string | number | null) => {
+    setDeals(prev => prev.map(d => {
+      if (d.id !== dealId) return d;
+      const next: CustomFieldValues = { ...(d.customFields || {}) };
+      if (value === null || value === "") delete next[key];
+      else next[key] = value;
+      return { ...d, customFields: next };
+    }));
+    whatsappApi.updateDeal(dealId, { customFields: { [key]: value } } as Partial<Deal>)
+      .catch(err => console.warn("[crm-store] setDealCustomField failed", err));
+  };
+
   const finishDeal = (f: FinishedDeal) => {
     setFinished(prev => [...prev, f]);
     const current = deals.find(deal => deal.id === f.dealId);
@@ -804,7 +882,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <Ctx.Provider value={{ deals, setDeals, addDeal, removeDeal, moveDeal, updateDeal, stages, addStage, updateStage, moveStage, reorderStage, removeStage, appointments, addAppointment, updateAppointment, removeAppointment, finished, finishDeal, agents, setAgents, agentUsage, refreshAgentUsage, resetAgentUsage: resetAgentUsageRemote, tags, setTags, teamUsers, setTeamUsers, accountProfile, setAccountProfile, currentUser, authReady, isAdmin, login, logout, hasPermission, canViewDeal, changePassword, refreshTeamUsers, conversationPatches, setConversationPatch, clearSchedulingProposal, leadDistribution, setLeadDistribution, agentSchedule, setAgentSchedule, getEligibleSellers, assignNextSeller, applyScheduledAgentIfActive, isAgentScheduleActive, prontuarios, refreshProntuarios, getProntuariosByDeal, linkMessageToProntuario, uploadProntuarioFile, renameProntuario, removeProntuario }}>
+    <Ctx.Provider value={{ deals, setDeals, addDeal, removeDeal, moveDeal, updateDeal, stages, addStage, updateStage, moveStage, reorderStage, removeStage, appointments, addAppointment, updateAppointment, removeAppointment, finished, finishDeal, agents, addAgent, updateAgentConfig, removeAgent, customFields, refreshCustomFields, setDealCustomField, agentUsage, refreshAgentUsage, resetAgentUsage: resetAgentUsageRemote, tags, setTags, teamUsers, setTeamUsers, accountProfile, setAccountProfile, currentUser, authReady, isAdmin, login, logout, hasPermission, canViewDeal, changePassword, refreshTeamUsers, conversationPatches, setConversationPatch, clearSchedulingProposal, leadDistribution, setLeadDistribution, agentSchedule, setAgentSchedule, getEligibleSellers, assignNextSeller, applyScheduledAgentIfActive, isAgentScheduleActive, prontuarios, refreshProntuarios, getProntuariosByDeal, linkMessageToProntuario, uploadProntuarioFile, renameProntuario, removeProntuario }}>
       {children}
     </Ctx.Provider>
   );

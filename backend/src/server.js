@@ -16,6 +16,7 @@ import { prontuariosRouter } from "./routes/prontuarios.js";
 import { scheduledMessagesRouter } from "./routes/scheduled-messages.js";
 import { dealsRouter } from "./routes/deals.js";
 import { stagesRouter } from "./routes/stages.js";
+import { customFieldsRouter } from "./routes/custom-fields.js";
 import { leadsRouter } from "./routes/leads.js";
 import { quickRepliesRouter } from "./routes/quick-replies.js";
 import { internalChatRouter } from "./routes/internal-chat.js";
@@ -55,6 +56,7 @@ async function main() {
   app.use("/api/scheduled-messages", scheduledMessagesRouter);
   app.use("/api/deals", dealsRouter);
   app.use("/api/stages", stagesRouter);
+  app.use("/api/custom-fields", customFieldsRouter);
   app.use("/api/leads", leadsRouter);
   app.use("/api/quick-replies", quickRepliesRouter);
   app.use("/api/internal-chat", internalChatRouter);

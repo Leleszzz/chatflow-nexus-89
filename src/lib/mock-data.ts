@@ -4,6 +4,21 @@ import stagesData from "@/banco-de-dados/stages.json";
 import tagsData from "@/banco-de-dados/tags.json";
 
 export type Temperature = "quente" | "morno" | "frio";
+
+// Campos personalizados do lead. A `key` (ex.: NOME_COMPLETO) é derivada do
+// rótulo na criação e nunca muda — é ela que chaveia os valores em
+// Deal.customFields e nomeia a propriedade no schema que a IA preenche.
+export type CustomFieldType = "texto" | "numero" | "data" | "lista";
+export interface CustomField {
+  id: string;
+  key: string;
+  label: string;
+  type: CustomFieldType;
+  options: string[];
+  required: boolean;
+  order: number;
+}
+export type CustomFieldValues = Record<string, string | number>;
 export type DealStage = string;
 export interface Stage {
   id: DealStage;
@@ -29,6 +44,7 @@ export interface Deal {
   notes?: string;
   aiEnabled?: boolean;
   aiAgentId?: string;
+  customFields?: CustomFieldValues;
 }
 
 export interface AgentUsage {
@@ -56,6 +72,8 @@ export interface Agent {
   objective?: string;
   tone?: string;
   fallbackMessage?: string;
+  /** `key`s de campos personalizados que este agente deve extrair da conversa. */
+  extractFields: string[];
 }
 
 export const STAGES = stagesData as Stage[];

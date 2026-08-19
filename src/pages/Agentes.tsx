@@ -11,7 +11,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useCRM } from "@/store/crm-store";
 import { Agent, MODEL_OPTIONS } from "@/lib/mock-data";
 import { whatsappApi } from "@/lib/whatsapp-api";
-import { Bot, Plus, Copy, Trash2, Pencil, Sparkles, Send, MessageSquare, CheckCircle2, PauseCircle, TestTube2, AlertTriangle, Loader2, DollarSign, RotateCcw } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Bot, Plus, Copy, Trash2, Pencil, Sparkles, Send, MessageSquare, CheckCircle2, PauseCircle, TestTube2, AlertTriangle, Loader2, DollarSign, RotateCcw, Target } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
@@ -36,6 +37,7 @@ const formatTokens = (n: number) => {
 const emptyAgent: Omit<Agent, "id" | "conversations" | "updatedAt"> = {
   name: "", description: "", prompt: "", model: "balanced", temperature: 0.7, active: true,
   channel: "WhatsApp Principal", triggerTags: [], blockWords: [], handoffMessage: "Vou te transferir para um especialista.", fallbackMessage: "Não consegui entender totalmente. Pode reformular?",
+  extractFields: [],
 };
 
 const AGENT_TEMPLATES = [
@@ -48,7 +50,7 @@ const AGENT_TEMPLATES = [
 ];
 
 export default function Agentes() {
-  const { agents, setAgents, agentUsage, refreshAgentUsage, resetAgentUsage, conversationPatches, deals } = useCRM();
+  const { agents, addAgent, updateAgentConfig, removeAgent, customFields, agentUsage, refreshAgentUsage, resetAgentUsage, conversationPatches, deals } = useCRM();
   const navigate = useNavigate();
   const [editing, setEditing] = useState<Agent | null>(null);
   const [open, setOpen] = useState(false);
@@ -97,24 +99,36 @@ export default function Agentes() {
 
   const editingUsage = editing && editing.id !== "new" ? agentUsage[editing.id] : undefined;
 
-  const save = () => {
+  const save = async () => {
     if (!editing) return;
     if (!editing.name.trim()) return toast.error("Nome do agente é obrigatório");
-    if (editing.id === "new") {
-      setAgents(prev => [...prev, { ...editing, id: `a${Date.now()}`, updatedAt: new Date().toISOString() }]);
+    const { id, conversations, updatedAt, ...payload } = editing;
+    if (id === "new") {
+      const criado = await addAgent(payload);
+      if (!criado) return toast.error("Não foi possível criar o agente");
       toast.success("Agente criado!");
     } else {
-      setAgents(prev => prev.map(a => a.id === editing.id ? { ...editing, updatedAt: new Date().toISOString() } : a));
+      await updateAgentConfig(id, payload);
       toast.success("Agente atualizado!");
     }
     setOpen(false);
   };
 
-  const duplicate = (a: Agent) => {
-    setAgents(prev => [...prev, { ...a, id: `a${Date.now()}`, name: `${a.name} (cópia)`, conversations: 0 }]);
-    toast.success("Agente duplicado");
+  const duplicate = async (a: Agent) => {
+    const { id, conversations, updatedAt, ...payload } = a;
+    const criado = await addAgent({ ...payload, name: `${a.name} (cópia)` });
+    toast[criado ? "success" : "error"](criado ? "Agente duplicado" : "Não foi possível duplicar");
   };
-  const remove = (id: string) => { setAgents(prev => prev.filter(a => a.id !== id)); toast.success("Agente removido"); };
+  const remove = async (id: string) => { await removeAgent(id); toast.success("Agente removido"); };
+
+  const toggleExtractField = (key: string) => {
+    if (!editing) return;
+    const atual = editing.extractFields || [];
+    setEditing({
+      ...editing,
+      extractFields: atual.includes(key) ? atual.filter(k => k !== key) : [...atual, key],
+    });
+  };
   const runTest = async () => {
     if (!editing) return;
     const message = testInput.trim();
@@ -311,6 +325,42 @@ export default function Agentes() {
                 <div><Label>Palavras que bloqueiam o agente</Label>
                   <Input value={editing.blockWords.join(", ")} onChange={e => setEditing({ ...editing, blockWords: e.target.value.split(",").map(s => s.trim()).filter(Boolean) })} /></div>
                 <div><Label>Limite de mensagens automáticas por conversa</Label><Input type="number" defaultValue={10} /></div>
+
+                <div className="rounded-xl border border-border/70 bg-secondary/40 p-3">
+                  <Label className="flex items-center gap-2">
+                    <Target className="h-4 w-4 text-primary" /> Meta de coleta
+                  </Label>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Os campos marcados entram no objetivo do agente: ele conduz a conversa para
+                    obtê-los e grava no cadastro do lead assim que o cliente informar.
+                  </p>
+                  {customFields.length === 0 ? (
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      Nenhum campo personalizado cadastrado ainda. Crie em{" "}
+                      <span className="font-medium">Configurações &rsaquo; Campos do lead</span>.
+                    </p>
+                  ) : (
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {customFields.map(field => {
+                        const marcado = (editing.extractFields || []).includes(field.key);
+                        return (
+                          <label
+                            key={field.id}
+                            className="flex cursor-pointer items-start gap-2 rounded-lg border border-border/70 bg-card p-2 text-xs transition hover:border-primary/50"
+                          >
+                            <Checkbox checked={marcado} onCheckedChange={() => toggleExtractField(field.key)} className="mt-0.5" />
+                            <span className="min-w-0">
+                              <span className="block truncate font-medium">{field.label}</span>
+                              <span className="block truncate font-mono text-[10px] text-muted-foreground">
+                                {field.key} · {field.type}
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </TabsContent>
 
               <TabsContent value="test" className="space-y-3 mt-4">

@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CustomFieldsManager } from "@/components/shared/CustomFieldsManager";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -420,6 +421,7 @@ export default function Configuracoes() {
           <TabsTrigger value="openai">OpenAI</TabsTrigger>
           <TabsTrigger value="leads">Lista de leads</TabsTrigger>
           <TabsTrigger value="mensagens">Mensagens rápidas</TabsTrigger>
+          <TabsTrigger value="campos">Campos do lead</TabsTrigger>
         </TabsList>
 
         <TabsContent value="account" className="card-elevated p-6 mt-4 max-w-2xl">
@@ -821,6 +823,10 @@ ANDRESSA PEREIRA SCHNEIDER|5845229758|27999060983`}
               ))}
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="campos" className="card-elevated p-6 mt-4">
+          <CustomFieldsManager />
         </TabsContent>
       </Tabs>
 

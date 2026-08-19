@@ -22,6 +22,7 @@ import { toast } from "sonner";
 import { useWhatsAppConversations, useWhatsAppMessages } from "@/hooks/useWhatsAppConversations";
 import { whatsappApi, LeadListEntry, QuickReply, ScheduledMessage, WAConversation, WAMessage, WhatsAppInstance } from "@/lib/whatsapp-api";
 import { renderTemplate } from "@/lib/message-template";
+import { phoneKey } from "@/lib/telefone";
 import { Label } from "@/components/ui/label";
 import { AudioMessage } from "@/components/chat/AudioMessage";
 import { ImageViewer } from "@/components/chat/ImageViewer";
@@ -72,6 +73,9 @@ const formatCpf = (doc: string) => {
   const d = (doc || "").replace(/\D/g, "");
   return d.length === 11 ? d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4") : doc;
 };
+
+// Opção do filtro para quem não está em etapa nenhuma (conversa sem card).
+const SEM_ETAPA = "__sem-etapa__";
 
 const toConversationFromDeal = (deal: Deal): Conversation => ({
   id: `deal-${deal.id}`,
@@ -293,17 +297,31 @@ export default function Conversas() {
   const sellerOptions = useMemo(() => teamUsers.filter(user => user.active && user.role !== "Administrador"), [teamUsers]);
   const activeAgents = useMemo(() => agents.filter(agent => agent.active), [agents]);
 
+  // Índice dos cards por telefone. O vínculo conversa→card (conversationPatches)
+  // mora no localStorage: em outro navegador — ou depois de limpar o cache — ele
+  // não existe, TODA conversa ficava sem etapa e o filtro de etapas do funil não
+  // achava nada. O telefone é o vínculo que sobrevive a isso.
+  const dealByPhone = useMemo(() => {
+    const index = new Map<string, Deal>();
+    for (const deal of deals) {
+      const key = phoneKey(deal.phone);
+      if (key && !index.has(key)) index.set(key, deal);
+    }
+    return index;
+  }, [deals]);
+
   const inboxConversations = useMemo(
     () => waConversations.map(wa => {
       const patch = waPatches[wa.id];
-      const linkedDeal = patch?.dealId ? deals.find(deal => deal.id === patch.dealId) : undefined;
+      const linkedDeal = (patch?.dealId ? deals.find(deal => deal.id === patch.dealId) : undefined)
+        ?? dealByPhone.get(phoneKey(wa.phone));
       const conv = toConversationFromWA(wa, patch, linkedDeal);
       if (duplicatedChatIds.has(wa.chatId)) {
         conv.instanceName = instanceNameById.get(wa.instanceId) || wa.instanceId;
       }
       return conv;
     }),
-    [waConversations, waPatches, deals, duplicatedChatIds, instanceNameById],
+    [waConversations, waPatches, deals, dealByPhone, duplicatedChatIds, instanceNameById],
   );
   const conversations = inboxConversations
     .filter(conversation =>
@@ -318,6 +336,15 @@ export default function Conversas() {
     : conversations[0]?.id;
   const [selectedId, setSelectedId] = useState(initialSelectedId);
 
+  // Quantas conversas caem em cada etapa. Vai no próprio filtro: assim dá para
+  // ver antes de marcar que uma etapa está vazia, em vez de marcar e encarar
+  // uma lista em branco sem saber por quê.
+  const stageCounts = new Map<string, number>();
+  for (const conversation of conversations) {
+    const key = conversation.stage || SEM_ETAPA;
+    stageCounts.set(key, (stageCounts.get(key) || 0) + 1);
+  }
+
   const activeSearch = conversationSearch.toLowerCase().trim();
   // Tudo o que passa pela busca e pelos filtros de recorte (etapa, instância,
   // responsável), mas ainda sem o filtro de status. É a base dos contadores dos
@@ -331,9 +358,10 @@ export default function Conversas() {
       sellerOptions.some(user => [user.name, user.role].join(" ").toLowerCase().includes(activeSearch) && [conversation.sellerId, ...(conversation.assignedSellerIds || [])].includes(user.id))
     )
     : conversations)
-    // Etapa do funil (múltipla): vazio = todas. Conversa sem etapa cai fora
-    // quando há filtro ativo (não pertence a nenhuma etapa selecionada).
-    .filter(conversation => stageFilter.size === 0 || (conversation.stage ? stageFilter.has(conversation.stage) : false))
+    // Etapa do funil (múltipla): vazio = todas. Quem não tem card entra na
+    // pseudo-etapa «Sem etapa», que é selecionável — antes essas conversas
+    // sumiam caladas e qualquer filtro parecia devolver lista vazia.
+    .filter(conversation => stageFilter.size === 0 || stageFilter.has(conversation.stage || SEM_ETAPA))
     // Instância e responsável: filtros exclusivos do admin. Vazio = todos.
     .filter(conversation => instanceFilter.size === 0 || (conversation.instanceId ? instanceFilter.has(conversation.instanceId) : false))
     .filter(conversation => sellerFilter.size === 0
@@ -365,6 +393,23 @@ export default function Conversas() {
   const selectedStatus = selected ? conversationStatus(selected) : null;
 
   const { messages: waMessages } = useWhatsAppMessages(isWaConversation ? selected?.id : null);
+
+  // Mensagens fatiadas por dia. Cada fatia vira uma <section> com o próprio
+  // separador sticky: sticky IRMÃOS dentro do mesmo container param todos na
+  // mesma altura e se sobrepõem («Hoje» por cima de «Ontem»). Cada separador
+  // dentro da sua seção fica preso ao bloco daquele dia, então o separador
+  // seguinte empurra o anterior para fora, como no WhatsApp.
+  const messageDayGroups = useMemo(() => {
+    const groups: { key: string; date: Date; messages: WAMessage[] }[] = [];
+    for (const message of waMessages) {
+      const date = new Date(message.timestamp * 1000);
+      const key = dayKey(date);
+      const last = groups[groups.length - 1];
+      if (last && last.key === key) last.messages.push(message);
+      else groups.push({ key, date, messages: [message] });
+    }
+    return groups;
+  }, [waMessages]);
 
   // Mensagens pré-configuradas (Configurações > Mensagens rápidas).
   const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
@@ -468,6 +513,7 @@ export default function Conversas() {
       setArchiveConfirmOpen(false);
       setSelectedId("");
       await refreshConversations();
+      await loadArchivedConversations();
       toast.success(`Conversa com ${selected.customer} arquivada`);
     } catch (err) {
       toast.error(`Não foi possível arquivar: ${err instanceof Error ? err.message : "erro desconhecido"}`);
@@ -500,6 +546,12 @@ export default function Conversas() {
     if (archivedListOpen) loadArchivedConversations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archivedListOpen]);
+
+  // Uma carga na entrada, só para o contador da linha «Conversas arquivadas»
+  // saber o que mostrar antes de alguém abrir o diálogo.
+  useEffect(() => {
+    if (isAdmin) loadArchivedConversations();
+  }, [isAdmin]);
 
   const updateSelectedConversation = (patch: Partial<Conversation>) => {
     if (!selected) return;
@@ -1163,8 +1215,22 @@ export default function Conversas() {
                           onCheckedChange={() => setStageFilter(cur => toggleInSet(cur, stage.id))}
                         />
                         <span className="truncate">{stage.title}</span>
+                        <span className="ml-auto shrink-0 text-[11px] font-medium tabular-nums text-muted-foreground">
+                          {stageCounts.get(stage.id) || 0}
+                        </span>
                       </label>
                     ))}
+                    <div className="my-1 h-px bg-border" />
+                    <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-secondary">
+                      <Checkbox
+                        checked={stageFilter.has(SEM_ETAPA)}
+                        onCheckedChange={() => setStageFilter(cur => toggleInSet(cur, SEM_ETAPA))}
+                      />
+                      <span className="truncate">Sem etapa</span>
+                      <span className="ml-auto shrink-0 text-[11px] font-medium tabular-nums text-muted-foreground">
+                        {stageCounts.get(SEM_ETAPA) || 0}
+                      </span>
+                    </label>
                   </div>
                 </PopoverContent>
               </Popover>
@@ -1274,6 +1340,32 @@ export default function Conversas() {
               })}
             </div>
           </div>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setArchivedListOpen(true)}
+              className="flex w-full shrink-0 items-center gap-3 border-b border-border/60 px-3 py-2.5 text-left transition-colors hover:bg-secondary/50"
+            >
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary">
+                <Archive className="h-4 w-4 text-muted-foreground" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">Conversas arquivadas</span>
+                <span className="block truncate text-[11px] text-muted-foreground">
+                  {archivedLoading
+                    ? "carregando…"
+                    : archivedList.length === 0
+                      ? "nenhuma conversa arquivada"
+                      : "clique para ver e restaurar"}
+                </span>
+              </span>
+              {archivedList.length > 0 && (
+                <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-bold tabular-nums text-muted-foreground">
+                  {archivedList.length}
+                </span>
+              )}
+            </button>
+          )}
           <div
             ref={conversationListRef}
             onScroll={event => { listScrollRef.current = event.currentTarget.scrollTop; }}
@@ -1442,13 +1534,14 @@ export default function Conversas() {
                       Nenhuma mensagem ainda nesta conversa.
                     </div>
                   ) : (
-                    waMessages.map((message, index) => {
-                      // Separador quando vira o dia (mensagens já vêm em ordem
-                      // cronológica). Também no primeiro item, para sempre haver
-                      // uma referência de data no topo do histórico visível.
-                      const dia = new Date(message.timestamp * 1000);
-                      const anterior = index > 0 ? new Date(waMessages[index - 1].timestamp * 1000) : null;
-                      const mostrarSeparador = !anterior || dayKey(dia) !== dayKey(anterior);
+                    messageDayGroups.map(group => (
+                    <section key={group.key} className="space-y-3">
+                      <div className="sticky top-2 z-20 flex justify-center py-1">
+                        <span className="rounded-full bg-secondary/90 px-3 py-1 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur">
+                          {formatDaySeparator(group.date)}
+                        </span>
+                      </div>
+                      {group.messages.map(message => {
                       // temMidia trata "arquivo sumiu do disco" igual a "nunca baixou",
                       // para nunca sobrar um balão vazio nem um ícone quebrado.
                       const temMidia = Boolean(message.mediaUrl) && !brokenMedia.has(message.id);
@@ -1456,13 +1549,6 @@ export default function Conversas() {
                       const exibeFigurinha = !message.deleted && message.type === "sticker" && temMidia;
                       return (
                       <Fragment key={message.id}>
-                        {mostrarSeparador && (
-                          <div className="sticky top-1 z-10 flex justify-center py-1">
-                            <span className="rounded-full bg-secondary/90 px-3 py-1 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur">
-                              {formatDaySeparator(dia)}
-                            </span>
-                          </div>
-                        )}
                       <div className={cn("flex", message.fromMe ? "justify-end" : "justify-start")}>
                         <div className={cn("max-w-[70%] rounded-2xl text-sm",
                           // Figurinha vai SEM balão, como no WhatsApp: o fundo
@@ -1589,7 +1675,9 @@ export default function Conversas() {
                       </div>
                       </Fragment>
                       );
-                    })
+                      })}
+                    </section>
+                    ))
                   )
                 ) : (
                   <div className="mx-auto flex max-w-md items-center gap-2 rounded-xl bg-info-soft p-3 text-xs text-info">

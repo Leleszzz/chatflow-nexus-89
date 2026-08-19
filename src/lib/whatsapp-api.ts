@@ -1,4 +1,4 @@
-import type { Deal, Stage } from "@/lib/mock-data";
+import type { Agent, CustomField, CustomFieldType, Deal, Stage } from "@/lib/mock-data";
 
 export type InstanceStatus = "ativa" | "desconectada" | "desligada" | "conectando" | "qr-pendente" | "codigo-pendente";
 
@@ -528,6 +528,8 @@ export const whatsappApi = {
     contextLimit?: number;
     agentId?: string;
     nowIso?: string;
+    /** Lead vinculado — sem ele o agente não tem onde gravar o que extrair. */
+    dealId?: string;
   }) =>
     request<{
       ok: true;
@@ -536,6 +538,7 @@ export const whatsappApi = {
       model: string;
       usage?: { promptTokens: number; completionTokens: number; costUsd: number };
       scheduling?: { baseDateIso: string; days: string[] } | null;
+      extracted?: Record<string, string | number | null> | null;
     }>("/api/agents/respond", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -596,4 +599,24 @@ export const whatsappApi = {
     request<Stage[]>("/api/stages/reorder", { method: "POST", body: JSON.stringify({ orderedIds }) }),
   deleteStage: (id: string) =>
     request<{ ok: true; stages: Stage[] }>(`/api/stages/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // ---- Campos personalizados do lead (schema compartilhado, admin edita) ----
+  listCustomFields: () => request<CustomField[]>("/api/custom-fields"),
+  createCustomField: (payload: { label: string; type?: CustomFieldType; options?: string[]; required?: boolean }) =>
+    request<CustomField>("/api/custom-fields", { method: "POST", body: JSON.stringify(payload) }),
+  updateCustomField: (id: string, patch: { label?: string; type?: CustomFieldType; options?: string[]; required?: boolean }) =>
+    request<CustomField>(`/api/custom-fields/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  reorderCustomFields: (orderedIds: string[]) =>
+    request<CustomField[]>("/api/custom-fields/reorder", { method: "POST", body: JSON.stringify({ orderedIds }) }),
+  deleteCustomField: (id: string) =>
+    request<{ ok: true; customFields: CustomField[] }>(`/api/custom-fields/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // ---- Agentes (migrados do localStorage para o Mongo) ----
+  listAgents: () => request<Agent[]>("/api/agents"),
+  createAgent: (payload: Partial<Agent>) =>
+    request<Agent>("/api/agents", { method: "POST", body: JSON.stringify(payload) }),
+  updateAgentRemote: (id: string, patch: Partial<Agent>) =>
+    request<Agent>(`/api/agents/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteAgent: (id: string) =>
+    request<{ ok: true; agents: Agent[] }>(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };

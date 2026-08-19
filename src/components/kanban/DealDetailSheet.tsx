@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { useCRM } from "@/store/crm-store";
 import { TagBadge } from "@/components/shared/Badges";
+import { CustomFieldsPanel } from "@/components/shared/CustomFieldsPanel";
 import { CalendarClock, CheckCircle2, Clock3, FolderOpen, MessageCircle, Plus, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
@@ -266,6 +267,8 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
                 ))}
               </div>
             </div>
+
+            <CustomFieldsPanel deal={deal} />
 
             <div>
               <Label htmlFor="notes">Observação interna</Label>

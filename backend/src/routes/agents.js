@@ -5,6 +5,10 @@ import { connectionManager } from "../whatsapp/ConnectionManager.js";
 import { listMessages } from "../storage/messages-repo.js";
 import { finalizeOutgoingMessage } from "../whatsapp/outgoing.js";
 import { addUsage, getAllUsage, resetUsage } from "../storage/agent-usage-repo.js";
+import { listAgents, getAgent, createAgent, updateAgent, deleteAgent } from "../storage/agents-repo.js";
+import { listCustomFields, applyCustomFieldValues } from "../storage/custom-fields-repo.js";
+import { getDeal, patchDeal } from "../storage/deals-repo.js";
+import { emitDealEvent } from "../socket/events.js";
 
 export const agentsRouter = Router();
 
@@ -129,6 +133,49 @@ const SCHEDULING_TOOL = {
   },
 };
 
+const SAVE_FIELDS_TOOL_NAME = "save_lead_fields";
+
+// Descreve o campo para a IA no formato que ela precisa preencher. O tipo virou
+// restrição de schema: "lista" usa enum, "data" exige YYYY-MM-DD, "numero" é
+// number — assim a extração já chega validável em coerceFieldValue.
+function fieldSchema(field) {
+  const base = { description: field.label };
+  switch (field.type) {
+    case "numero":
+      return { ...base, type: "number" };
+    case "data":
+      return { ...base, type: "string", description: `${field.label} (formato YYYY-MM-DD)` };
+    case "lista":
+      return { ...base, type: "string", enum: field.options };
+    default:
+      return { ...base, type: "string" };
+  }
+}
+
+function buildSaveFieldsTool(pendentes) {
+  const properties = {};
+  for (const field of pendentes) properties[field.key] = fieldSchema(field);
+  return {
+    type: "function",
+    function: {
+      name: SAVE_FIELDS_TOOL_NAME,
+      description:
+        "Grava no cadastro do lead os dados que o cliente informou. Envie APENAS os campos cujo valor o cliente realmente disse nesta conversa — nunca invente, deduza ou preencha com exemplo. Se nenhum dado novo foi informado, não chame esta ferramenta.",
+      parameters: { type: "object", properties },
+    },
+  };
+}
+
+// Instrução que faz o agente PERSEGUIR a meta, e não só extrair passivamente.
+function collectionInstruction(pendentes) {
+  const lista = pendentes.map(f => `- ${f.label} (${f.key})`).join("\n");
+  return [
+    "META DE COLETA — dados do lead que ainda faltam:",
+    lista,
+    `Conduza a conversa para obter esses dados, pedindo no máximo dois por mensagem e sempre de forma natural, sem soar como formulário. Não repita um pedido que o cliente já respondeu ou recusou. Assim que o cliente informar algum deles, chame ${SAVE_FIELDS_TOOL_NAME} para gravar. Nunca invente valores.`,
+  ].join("\n");
+}
+
 agentsRouter.post("/test", requireAuth(), async (req, res) => {
   const { model, temperature, systemPrompt, userMessage } = req.body || {};
   const userText = typeof userMessage === "string" ? userMessage.trim() : "";
@@ -162,6 +209,41 @@ agentsRouter.post("/test", requireAuth(), async (req, res) => {
   }
 });
 
+// ---- CRUD dos agentes (compartilhado entre o time via Mongo) ----
+// Todos leem; só admin escreve. O broadcast "agents:update" reconcilia os
+// clientes, igual ao que etapas já fazem.
+function broadcastAgents(req, agents) {
+  const io = req.app.get("io");
+  if (io) io.emit("agents:update", { agents });
+}
+
+agentsRouter.get("/", requireAuth(), async (_req, res) => {
+  res.json(await listAgents());
+});
+
+agentsRouter.post("/", requireAuth({ admin: true }), async (req, res) => {
+  const name = String(req.body?.name || "").trim();
+  if (!name) return res.status(400).json({ error: "name é obrigatório" });
+  const agent = await createAgent({ ...(req.body || {}), name });
+  broadcastAgents(req, await listAgents());
+  res.status(201).json(agent);
+});
+
+agentsRouter.patch("/:id", requireAuth({ admin: true }), async (req, res) => {
+  const updated = await updateAgent(req.params.id, req.body || {});
+  if (!updated) return res.status(404).json({ error: "agente não encontrado" });
+  broadcastAgents(req, await listAgents());
+  res.json(updated);
+});
+
+agentsRouter.delete("/:id", requireAuth({ admin: true }), async (req, res) => {
+  const removed = await deleteAgent(req.params.id);
+  if (!removed) return res.status(404).json({ error: "agente não encontrado" });
+  const agents = await listAgents();
+  broadcastAgents(req, agents);
+  res.json({ ok: true, agents });
+});
+
 agentsRouter.get("/usage", requireAuth(), async (_req, res) => {
   const all = await getAllUsage();
   res.json(all);
@@ -182,6 +264,7 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
     contextLimit,
     agentId,
     nowIso,
+    dealId,
   } = req.body || {};
 
   if (!instanceId || !chatId) {
@@ -204,10 +287,35 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
 
   const effectiveNowIso = typeof nowIso === "string" && nowIso ? nowIso : new Date().toISOString();
   const baseSystem = typeof systemPrompt === "string" ? systemPrompt.trim() : "";
+  // Meta de coleta: cruza os campos que ESTE agente deve extrair (definidos no
+  // agente, em Mongo) com os que o lead ainda não tem preenchidos. Só entram na
+  // ferramenta e no prompt os que faltam — pedir o que já foi coletado irrita o
+  // cliente e gasta token à toa.
+  let camposPendentes = [];
+  let deal = null;
+  try {
+    const agente = agentId ? await getAgent(agentId) : null;
+    if (agente?.extractFields?.length) {
+      deal = dealId ? await getDeal(dealId) : null;
+      const definicoes = await listCustomFields();
+      const byKey = new Map(definicoes.map(f => [f.key, f]));
+      const jaPreenchidos = deal?.customFields || {};
+      camposPendentes = agente.extractFields
+        .map(key => byKey.get(key))
+        .filter(f => f && jaPreenchidos[f.key] === undefined);
+    }
+  } catch (err) {
+    // Extração é um extra: se a meta não puder ser resolvida, o agente ainda responde.
+    console.warn(`[agents:respond] meta de campos indisponível: ${err.message}`);
+  }
+  // Sem deal vinculado não há onde gravar, então nem oferecemos a ferramenta.
+  const podeExtrair = Boolean(deal) && camposPendentes.length > 0;
+
   const augmentedSystem = [
     baseSystem,
     `Data/hora atual (ISO): ${effectiveNowIso}.`,
     "Você tem acesso à ferramenta propose_scheduling. Chame-a APENAS quando o cliente quiser agendar, remarcar ou perguntar por horários. NÃO liste horários no texto da resposta — o painel de horários aparece para o atendente humano. Quando o cliente disser 'semana que vem', passe base_date como a próxima segunda-feira em YYYY-MM-DD.",
+    podeExtrair ? collectionInstruction(camposPendentes) : "",
   ].filter(Boolean).join("\n\n");
 
   const chatMessages = [{ role: "system", content: augmentedSystem }];
@@ -232,14 +340,18 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
   let totalCostUsd = 0;
   let reply = "";
   let scheduling = null;
+  let extracted = null;
 
   try {
+    const tools = [SCHEDULING_TOOL];
+    if (podeExtrair) tools.push(buildSaveFieldsTool(camposPendentes));
+
     const first = await callOpenAI({
       apiKey,
       model: openaiModel,
       temperature: safeTemperature,
       messages: chatMessages,
-      tools: [SCHEDULING_TOOL],
+      tools,
       tool_choice: "auto",
     });
 
@@ -252,6 +364,28 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
     const firstMsg = first?.choices?.[0]?.message;
     const toolCalls = Array.isArray(firstMsg?.tool_calls) ? firstMsg.tool_calls : [];
     const schedCall = toolCalls.find(c => c?.function?.name === "propose_scheduling");
+    const saveCalls = toolCalls.filter(c => c?.function?.name === SAVE_FIELDS_TOOL_NAME);
+
+    // Grava o que a IA extraiu ANTES de decidir a resposta: mesmo que a conversa
+    // vire agendamento no mesmo turno, o dado coletado não se perde.
+    if (saveCalls.length && deal) {
+      const bruto = {};
+      for (const call of saveCalls) {
+        try { Object.assign(bruto, JSON.parse(call.function.arguments || "{}")); } catch {}
+      }
+      const definicoes = await listCustomFields();
+      const { values, aplicados, rejeitados } = applyCustomFieldValues(definicoes, deal.customFields, bruto);
+      if (rejeitados.length) {
+        console.warn(`[agents:respond] campos rejeitados: ${rejeitados.map(r => `${r.key} (${r.motivo})`).join(", ")}`);
+      }
+      if (aplicados.length) {
+        const atualizado = await patchDeal(deal.id, { customFields: values });
+        if (atualizado) {
+          extracted = Object.fromEntries(aplicados.map(k => [k, values[k] ?? null]));
+          emitDealEvent(req.app.get("io"), "deal:update", atualizado, deal);
+        }
+      }
+    }
 
     if (schedCall) {
       let args = {};
@@ -260,6 +394,36 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
       const days = nextBusinessDays(baseDate, 5);
       scheduling = { baseDateIso: dateKey(baseDate), days };
       reply = SCHEDULING_REPLY;
+    } else if (saveCalls.length) {
+      // A chamada de ferramenta não produz texto para o cliente. Devolvemos o
+      // resultado de cada tool_call (a API exige um por id) e pedimos a resposta
+      // numa segunda passada, com tool_choice "none" para garantir texto.
+      const second = await callOpenAI({
+        apiKey,
+        model: openaiModel,
+        temperature: safeTemperature,
+        messages: [
+          ...chatMessages,
+          firstMsg,
+          ...toolCalls.map(call => ({
+            role: "tool",
+            tool_call_id: call.id,
+            content: JSON.stringify(
+              call.function?.name === SAVE_FIELDS_TOOL_NAME
+                ? { ok: true, salvos: extracted ? Object.keys(extracted) : [] }
+                : { ok: true },
+            ),
+          })),
+        ],
+        tools,
+        tool_choice: "none",
+      });
+      if (second?.usage) {
+        totalPromptTokens += Number(second.usage.prompt_tokens) || 0;
+        totalCompletionTokens += Number(second.usage.completion_tokens) || 0;
+        totalCostUsd += priceFor(openaiModel, second.usage);
+      }
+      reply = second?.choices?.[0]?.message?.content?.trim() || "";
     } else {
       reply = firstMsg?.content?.trim() || "";
     }
@@ -312,5 +476,6 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
       costUsd: Number(totalCostUsd.toFixed(8)),
     },
     scheduling,
+    extracted,
   });
 });

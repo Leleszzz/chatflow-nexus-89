@@ -6,6 +6,23 @@ const PROJ = { projection: { _id: 0 } };
 
 const VALID_TEMPS = new Set(["quente", "morno", "frio"]);
 
+// Valores dos campos personalizados, chaveados pela `key` da definição
+// (custom-fields-repo). Só string/number passam: a tipagem forte é aplicada por
+// coerceFieldValue antes de chegar aqui, então este é o último filtro.
+function sanitizeCustomFields(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (value === null || value === undefined || value === "") continue;
+    if (typeof value === "number") {
+      if (Number.isFinite(value)) out[String(key)] = value;
+      continue;
+    }
+    out[String(key)] = String(value);
+  }
+  return out;
+}
+
 // Normaliza para o mesmo shape do tipo Deal do front (src/lib/mock-data.ts).
 function normalize(record) {
   return {
@@ -26,6 +43,7 @@ function normalize(record) {
     notes: record.notes ? String(record.notes) : undefined,
     aiEnabled: record.aiEnabled ?? undefined,
     aiAgentId: record.aiAgentId ? String(record.aiAgentId) : undefined,
+    customFields: sanitizeCustomFields(record.customFields),
   };
 }
 
@@ -51,7 +69,13 @@ export async function upsertDeal(record) {
 export async function patchDeal(id, patch) {
   const existing = await getDeal(id);
   if (!existing) return null;
-  const updated = normalize({ ...existing, ...patch, id });
+  // customFields é MESCLADO, não substituído: quem edita um campo só manda
+  // aquele campo, e um patch raso apagaria todos os outros valores coletados.
+  // Para limpar um campo, mande-o como null/"" — sanitizeCustomFields descarta.
+  const customFields = patch && "customFields" in patch
+    ? { ...(existing.customFields || {}), ...(patch.customFields || {}) }
+    : existing.customFields;
+  const updated = normalize({ ...existing, ...patch, customFields, id });
   await col().updateOne({ _id: id }, { $set: updated });
   return updated;
 }

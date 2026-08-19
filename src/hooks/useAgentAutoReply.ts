@@ -91,7 +91,13 @@ export function useAgentAutoReply() {
           contextLimit: CONTEXT_LIMIT,
           agentId: agent.id,
           nowIso: new Date().toISOString(),
+          // Sem o lead vinculado o backend não tem onde gravar o que extrair.
+          dealId,
         });
+        if (response?.extracted && Object.keys(response.extracted).length) {
+          // O backend já persistiu e emitiu deal:update; aqui é só o aviso.
+          toast.success(`Agente coletou: ${Object.keys(response.extracted).join(", ")}`);
+        }
         if (response?.scheduling?.days?.length) {
           crmRef.current.setConversationPatch(conversation.id, {
             aiEnabled: false,

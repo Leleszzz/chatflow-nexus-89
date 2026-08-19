@@ -22,6 +22,7 @@ export const config = {
     // Semente inicial de usuários. Mora na árvore do frontend por herança do
     // scaffold — só é lida quando a coleção `users` está vazia.
     usersSeedFile: path.resolve(BACKEND_ROOT, "..", "src", "banco-de-dados", "users.json"),
+    agentsSeedFile: path.resolve(BACKEND_ROOT, "..", "src", "banco-de-dados", "agents.json"),
     mediaDir: path.join(DATA_DIR, "media"),
     baileysAuthDir: path.join(DATA_DIR, ".baileys_auth"),
   },

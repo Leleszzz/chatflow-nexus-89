@@ -53,6 +53,8 @@ export const collections = {
   internalMessages: "internal_messages",
   campaigns: "campaigns",
   campaignTargets: "campaign_targets",
+  customFields: "custom_fields",
+  agents: "agents",
 };
 
 async function ensureIndexes() {
@@ -65,6 +67,7 @@ async function ensureIndexes() {
     getCol(collections.deals).createIndex({ stage: 1 }),
     getCol(collections.deals).createIndex({ sellerId: 1 }),
     getCol(collections.stages).createIndex({ order: 1 }),
+    getCol(collections.customFields).createIndex({ order: 1 }),
     getCol(collections.internalThreads).createIndex({ memberIds: 1, lastMessageAt: -1 }),
     getCol(collections.internalMessages).createIndex({ threadId: 1, createdAt: 1 }),
     // Contagem de não-lidas: filtra por remetente diferente e ausência do leitor.

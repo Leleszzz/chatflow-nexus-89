@@ -1,4 +1,14 @@
-import { DragEvent, FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, MouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  DndContext,
+  DragEndEvent,
+  PointerSensor,
+  pointerWithin,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   addDays,
@@ -35,6 +45,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Appointment, AppointmentType, useCRM } from "@/store/crm-store";
+import { clamp, minutesFromTime, novoHorarioAoArrastar, timeFromMinutes } from "@/lib/agenda";
 import { cn } from "@/lib/utils";
 
 type CalendarView = "day" | "week" | "month";
@@ -58,14 +69,7 @@ const fromDateKey = (date: string) => {
   const [year, month, day] = date.split("-").map(Number);
   return new Date(year, month - 1, day);
 };
-const minutesFromTime = (time: string) => {
-  const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes;
-};
-const timeFromMinutes = (totalMinutes: number) =>
-  `${String(Math.floor(totalMinutes / 60)).padStart(2, "0")}:${String(totalMinutes % 60).padStart(2, "0")}`;
 const formatDateTime = (appointment: Appointment) => `${format(fromDateKey(appointment.date), "dd/MM/yyyy")} às ${appointment.startTime}`;
-const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
 const emptyForm = (dealId: string, sellerId: string, date = toDateKey(new Date()), startTime = "09:00", durationMinutes = 30) => ({
   title: "",
@@ -79,6 +83,135 @@ const emptyForm = (dealId: string, sellerId: string, date = toDateKey(new Date()
   status: "agendado" as Appointment["status"],
   origin: "Conversa",
 });
+
+// Um agendamento na grade de horários. O arrasto é o mesmo do Kanban
+// (@dnd-kit + PointerSensor), então clicar continua abrindo o cadastro: só vira
+// arrasto depois de 5px de movimento.
+function TimedAppointmentEvent({ appointment, top, height, typeStyle, canDrag, onOpen }: {
+  appointment: Appointment;
+  top: number;
+  height: number;
+  typeStyle?: string;
+  canDrag: boolean;
+  onOpen: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: appointment.id,
+    disabled: !canDrag,
+  });
+
+  return (
+    <button
+      ref={setNodeRef}
+      type="button"
+      data-appointment-event="true"
+      onClick={event => {
+        event.stopPropagation();
+        onOpen();
+      }}
+      {...(canDrag ? listeners : {})}
+      {...(canDrag ? attributes : {})}
+      className={cn(
+        "pointer-events-auto absolute w-[calc(100%-8px)] rounded-md border px-2 py-1 text-left text-[11px] shadow-sm transition-shadow hover:shadow-md",
+        canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+        isDragging ? "z-30 shadow-lg ring-2 ring-primary/40" : "z-10",
+        typeStyle,
+      )}
+      style={{
+        top,
+        height,
+        transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
+      }}
+      title={`${appointment.title} - ${appointment.startTime}`}
+    >
+      <div className="truncate font-semibold">{appointment.title}</div>
+      <div className="truncate opacity-80">{appointment.startTime} - {appointment.endTime}</div>
+    </button>
+  );
+}
+
+// A mesma etiqueta, na visão de mês: lá só existe o dia, então o arrasto muda a
+// data e preserva o horário.
+function MonthAppointmentChip({ appointment, typeStyle, canDrag, onOpen }: {
+  appointment: Appointment;
+  typeStyle?: string;
+  canDrag: boolean;
+  onOpen: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: appointment.id,
+    disabled: !canDrag,
+  });
+
+  return (
+    <span
+      ref={setNodeRef}
+      role="button"
+      tabIndex={0}
+      onClick={event => {
+        event.stopPropagation();
+        onOpen();
+      }}
+      {...(canDrag ? listeners : {})}
+      {...(canDrag ? attributes : {})}
+      className={cn(
+        "block truncate rounded border px-2 py-1 text-[11px] font-medium",
+        canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+        isDragging && "relative z-30 shadow-lg ring-2 ring-primary/40",
+        typeStyle,
+      )}
+      style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined }}
+    >
+      {appointment.startTime} {appointment.title}
+    </span>
+  );
+}
+
+// Colunas e células que recebem o agendamento solto. O id carrega a visão e a
+// data — handleDragEnd lê os dois para saber se ajusta só o dia ou o horário.
+function DropDayColumn({ dateKey, height, onSlotClick, children }: {
+  dateKey: string;
+  height: number;
+  onSlotClick: (event: MouseEvent<HTMLDivElement>) => void;
+  children: ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `dia:${dateKey}` });
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn("relative border-r border-border/70", isOver && "ring-2 ring-inset ring-primary/50")}
+      onClick={onSlotClick}
+      style={{ height }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function DropMonthCell({ dateKey, className, onClick, children }: {
+  dateKey: string;
+  className: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `mes:${dateKey}` });
+  return (
+    <div
+      ref={setNodeRef}
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={event => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        onClick();
+      }}
+      className={cn(className, isOver && "ring-2 ring-inset ring-primary/50")}
+    >
+      {children}
+    </div>
+  );
+}
 
 export default function Calendario() {
   const { appointments, addAppointment, updateAppointment, removeAppointment, deals, teamUsers, currentUser, isAdmin, canViewDeal } = useCRM();
@@ -94,7 +227,13 @@ export default function Calendario() {
   const filterSellerOptions = useMemo(() => isAdmin ? sellerOptions : sellerOptions.filter(user => user.id === currentUser?.id), [currentUser?.id, isAdmin, sellerOptions]);
   const defaultSellerId = isAdmin ? sellerOptions[0]?.id || "" : currentUser?.id || "";
   const [form, setForm] = useState(() => emptyForm(selectableDeals[0]?.id || "", defaultSellerId));
-  const [draggingAppointmentId, setDraggingAppointmentId] = useState<string | null>(null);
+  // Mesma folga do Kanban: até 5px ainda é clique, depois vira arrasto.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  // Ao soltar, o navegador ainda dispara um `click` no ancestral comum — que na
+  // grade é a própria coluna, e abriria o «novo agendamento» por cima do que
+  // acabou de ser movido. Esta marca faz o clique seguinte ser ignorado.
+  const dragEndedAtRef = useRef(0);
+  const acabouDeArrastar = () => Date.now() - dragEndedAtRef.current < 250;
   const [filterSellerIds, setFilterSellerIds] = useState<string[]>(() => isAdmin ? [] : currentUser?.id ? [currentUser.id] : []);
   const [filterType, setFilterType] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
@@ -175,6 +314,7 @@ export default function Calendario() {
   };
 
   const openEdit = (appointment: Appointment) => {
+    if (acabouDeArrastar()) return;
     if (!isAdmin && appointment.sellerId !== currentUser?.id) {
       toast.info("Este agendamento é de outra vendedora e fica disponível apenas para consulta.");
       return;
@@ -190,6 +330,7 @@ export default function Calendario() {
       description: appointment.description,
       type: appointment.type,
       status: appointment.status || "agendado",
+      origin: appointment.origin || "Conversa",
     });
     setModalOpen(true);
   };
@@ -229,20 +370,15 @@ export default function Calendario() {
     setModalOpen(false);
   };
 
-  const startAppointmentDrag = (event: DragEvent<HTMLElement>, appointmentId: string) => {
-    const appointment = appointments.find(item => item.id === appointmentId);
-    if (!appointment || (!isAdmin && appointment.sellerId !== currentUser?.id)) {
-      event.preventDefault();
-      return;
-    }
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", appointmentId);
-    setDraggingAppointmentId(appointmentId);
-  };
+  const podeMover = (appointment: Appointment) => isAdmin || appointment.sellerId === currentUser?.id;
 
   const moveAppointment = (appointmentId: string, date: string, startTime?: string) => {
     const appointment = appointments.find(item => item.id === appointmentId);
     if (!appointment) return;
+    if (!podeMover(appointment)) {
+      toast.info("Este agendamento é de outra vendedora e fica disponível apenas para consulta.");
+      return;
+    }
 
     const patch: Partial<Appointment> = { date };
     if (startTime) {
@@ -252,47 +388,60 @@ export default function Calendario() {
     }
     const nextStart = patch.startTime || appointment.startTime;
     const nextEnd = patch.endTime || appointment.endTime;
-    const hasConflict = appointments.some(item => item.id !== appointment.id && item.date === date
+    // O choque é dentro da agenda de cada vendedora — a mesma regra do
+    // formulário. Sem o recorte por responsável, o horário de uma travava o de
+    // todas e o arrasto era recusado sem motivo.
+    const hasConflict = appointments.some(item => item.id !== appointment.id
+      && item.date === date
+      && item.sellerId === appointment.sellerId
       && minutesFromTime(nextStart) < minutesFromTime(item.endTime)
       && minutesFromTime(nextEnd) > minutesFromTime(item.startTime));
 
     if (hasConflict) {
-      setDraggingAppointmentId(null);
       toast.error("Já existe agendamento neste horário.");
       return;
     }
 
     updateAppointment(appointment.id, patch);
-    setDraggingAppointmentId(null);
-    toast.success("Agendamento reagendado");
+    toast.success(`Reagendado para ${format(fromDateKey(date), "dd/MM")} às ${nextStart}`);
   };
 
-  const handleAppointmentDrop = (event: DragEvent<HTMLElement>, date: string, startTime?: string) => {
-    event.preventDefault();
-    const appointmentId = event.dataTransfer.getData("text/plain") || draggingAppointmentId;
-    if (!appointmentId) return;
-    moveAppointment(appointmentId, date, startTime);
-  };
+  const handleDragEnd = (event: DragEndEvent) => {
+    dragEndedAtRef.current = Date.now();
 
-  const handleTimedAppointmentDrop = (event: DragEvent<HTMLDivElement>, date: string) => {
-    event.preventDefault();
-    const appointmentId = event.dataTransfer.getData("text/plain") || draggingAppointmentId;
-    if (!appointmentId) return;
-    const appointment = appointments.find(item => item.id === appointmentId);
-    if (!appointment) return;
+    const appointment = appointments.find(item => item.id === String(event.active.id));
+    const overId = event.over ? String(event.over.id) : "";
+    if (!appointment || !overId) return;
 
-    const rect = event.currentTarget.getBoundingClientRect();
-    const minutesFromStart = (clamp(event.clientY - rect.top, 0, rect.height) / HOUR_HEIGHT) * 60;
-    const duration = Math.max(15, minutesFromTime(appointment.endTime) - minutesFromTime(appointment.startTime));
-    const dayStart = HOURS[0] * 60;
-    const dayEnd = dayStart + HOURS.length * 60;
-    const snappedMinutes = Math.round(minutesFromStart / 15) * 15;
-    const startTime = timeFromMinutes(clamp(dayStart + snappedMinutes, dayStart, dayEnd - duration));
+    const corte = overId.indexOf(":");
+    const alvo = overId.slice(0, corte);
+    const date = overId.slice(corte + 1);
+    if (!date) return;
 
-    moveAppointment(appointmentId, date, startTime);
+    // Mês só tem resolução de dia: mantém o horário e muda a data.
+    if (alvo === "mes") {
+      if (date === appointment.date) return;
+      moveAppointment(appointment.id, date);
+      return;
+    }
+
+    // Dia/semana: o quanto o card subiu ou desceu define o novo horário.
+    const inicioDaGrade = HOURS[0] * 60;
+    const startTime = novoHorarioAoArrastar({
+      startTime: appointment.startTime,
+      endTime: appointment.endTime,
+      deltaY: event.delta.y,
+      hourHeight: HOUR_HEIGHT,
+      gradeInicio: inicioDaGrade,
+      gradeFim: inicioDaGrade + HOURS.length * 60,
+    });
+
+    if (date === appointment.date && startTime === appointment.startTime) return;
+    moveAppointment(appointment.id, date, startTime);
   };
 
   const handleTimedSlotClick = (event: MouseEvent<HTMLDivElement>, date: string) => {
+    if (acabouDeArrastar()) return;
     if ((event.target as HTMLElement).closest("[data-appointment-event='true']")) return;
 
     const rect = event.currentTarget.getBoundingClientRect();
@@ -320,37 +469,22 @@ export default function Calendario() {
   const appointmentsForDate = (date: Date) => sortedAppointments.filter(appointment => appointment.date === toDateKey(date));
 
   const renderTimedEvents = (date: Date) => (
-    <div className="absolute inset-x-1 top-0 bottom-0">
+    <div className="pointer-events-none absolute inset-x-1 top-0 bottom-0">
       {appointmentsForDate(date).map(appointment => {
         const start = minutesFromTime(appointment.startTime);
         const end = minutesFromTime(appointment.endTime);
         const top = ((start - HOURS[0] * 60) / 60) * HOUR_HEIGHT;
         const height = Math.max(((end - start) / 60) * HOUR_HEIGHT, 34);
-        const typeStyle = APPOINTMENT_TYPES.find(type => type.value === appointment.type)?.className;
-
         return (
-          <button
+          <TimedAppointmentEvent
             key={appointment.id}
-            type="button"
-            draggable={isAdmin || appointment.sellerId === currentUser?.id}
-            onDragStart={event => startAppointmentDrag(event, appointment.id)}
-            onDragEnd={() => setDraggingAppointmentId(null)}
-            onClick={event => {
-              event.stopPropagation();
-              openEdit(appointment);
-            }}
-            data-appointment-event="true"
-            className={cn(
-              "pointer-events-auto absolute z-10 w-[calc(100%-8px)] cursor-grab rounded-md border px-2 py-1 text-left text-[11px] shadow-sm transition hover:shadow-md active:cursor-grabbing",
-              draggingAppointmentId === appointment.id && "opacity-60",
-              typeStyle,
-            )}
-            style={{ top, height }}
-            title={`${appointment.title} - ${appointment.startTime}`}
-          >
-            <div className="truncate font-semibold">{appointment.title}</div>
-            <div className="truncate opacity-80">{appointment.startTime} - {appointment.endTime}</div>
-          </button>
+            appointment={appointment}
+            top={top}
+            height={height}
+            typeStyle={APPOINTMENT_TYPES.find(type => type.value === appointment.type)?.className}
+            canDrag={podeMover(appointment)}
+            onOpen={() => openEdit(appointment)}
+          />
         );
       })}
     </div>
@@ -445,6 +579,7 @@ export default function Calendario() {
           </div>
         </div>
 
+        <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragEnd={handleDragEnd}>
         {view === "month" ? (
           <div className="overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
             <div className="grid grid-cols-7 border-b border-border bg-secondary/40 text-center text-xs font-semibold uppercase text-muted-foreground">
@@ -454,14 +589,15 @@ export default function Calendario() {
               {monthDays.map(day => {
                 const dayAppointments = appointmentsForDate(day);
                 return (
-                  <button
+                  <DropMonthCell
                     key={day.toISOString()}
-                    type="button"
-                    onClick={() => openCreate(toDateKey(day), "09:00")}
-                    onDragOver={event => event.preventDefault()}
-                    onDrop={event => handleAppointmentDrop(event, toDateKey(day))}
+                    dateKey={toDateKey(day)}
+                    onClick={() => {
+                      if (acabouDeArrastar()) return;
+                      openCreate(toDateKey(day), "09:00");
+                    }}
                     className={cn(
-                      "min-h-28 border-b border-r border-border/60 bg-card p-2 text-left transition hover:bg-secondary/50",
+                      "min-h-28 cursor-pointer border-b border-r border-border/60 bg-card p-2 text-left transition hover:bg-secondary/50",
                       !isSameMonth(day, cursor) && "bg-secondary/30 text-muted-foreground",
                     )}
                   >
@@ -469,29 +605,18 @@ export default function Calendario() {
                       {format(day, "d")}
                     </div>
                     <div className="space-y-1">
-                      {dayAppointments.slice(0, 3).map(appointment => {
-                        const typeStyle = APPOINTMENT_TYPES.find(type => type.value === appointment.type)?.className;
-                        return (
-                          <span
-                            key={appointment.id}
-                            role="button"
-                            tabIndex={0}
-                            draggable={isAdmin || appointment.sellerId === currentUser?.id}
-                            onDragStart={event => startAppointmentDrag(event, appointment.id)}
-                            onDragEnd={() => setDraggingAppointmentId(null)}
-                            onClick={event => {
-                              event.stopPropagation();
-                              openEdit(appointment);
-                            }}
-                            className={cn("block cursor-grab truncate rounded border px-2 py-1 text-[11px] font-medium active:cursor-grabbing", draggingAppointmentId === appointment.id && "opacity-60", typeStyle)}
-                          >
-                            {appointment.startTime} {appointment.title}
-                          </span>
-                        );
-                      })}
+                      {dayAppointments.slice(0, 3).map(appointment => (
+                        <MonthAppointmentChip
+                          key={appointment.id}
+                          appointment={appointment}
+                          typeStyle={APPOINTMENT_TYPES.find(type => type.value === appointment.type)?.className}
+                          canDrag={podeMover(appointment)}
+                          onOpen={() => openEdit(appointment)}
+                        />
+                      ))}
                       {dayAppointments.length > 3 && <div className="text-[11px] text-muted-foreground">+{dayAppointments.length - 3} agendamentos</div>}
                     </div>
-                  </button>
+                  </DropMonthCell>
                 );
               })}
             </div>
@@ -532,27 +657,26 @@ export default function Calendario() {
                 </div>
 
                 {(view === "day" ? [cursor] : weekDays).map(day => (
-                  <div
+                  <DropDayColumn
                     key={day.toISOString()}
-                    className="relative border-r border-border/70"
-                    onClick={event => handleTimedSlotClick(event, toDateKey(day))}
-                    onDragOver={event => event.preventDefault()}
-                    onDrop={event => handleTimedAppointmentDrop(event, toDateKey(day))}
-                    style={{ height: HOURS.length * HOUR_HEIGHT }}
+                    dateKey={toDateKey(day)}
+                    height={HOURS.length * HOUR_HEIGHT}
+                    onSlotClick={event => handleTimedSlotClick(event, toDateKey(day))}
                   >
                     {HOURS.map(hour => (
-                    <div
-                      key={hour}
-                      className="h-16 w-full border-b border-border/70 bg-card hover:bg-secondary/40"
-                    />
-                  ))}
+                      <div
+                        key={hour}
+                        className="h-16 w-full border-b border-border/70 bg-card hover:bg-secondary/40"
+                      />
+                    ))}
                     {renderTimedEvents(day)}
-                  </div>
+                  </DropDayColumn>
                 ))}
               </div>
             </div>
           </div>
         )}
+        </DndContext>
 
         <div className="grid gap-3 lg:grid-cols-3">
           {sortedAppointments.slice(0, 6).map(appointment => {
