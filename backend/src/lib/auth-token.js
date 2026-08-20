@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 const JWT_SECRET = process.env.JWT_SECRET || "queijo";
 const JWT_ALGORITHM = "HS256";
-const TOKEN_TTL_SECONDS = 60 * 60 * 8;
+export const TOKEN_TTL_SECONDS = 60 * 60 * 8;
 
 const base64UrlEncode = value => {
   const buffer = typeof value === "string" ? Buffer.from(value, "utf8") : Buffer.from(value);

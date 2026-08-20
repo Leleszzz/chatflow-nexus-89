@@ -1,4 +1,5 @@
 import { verifyAuthToken } from "../lib/auth-token.js";
+import { readAuthCookie } from "../lib/auth-cookie.js";
 import { getUser } from "../storage/users-repo.js";
 
 // Middleware io.use: exige JWT válido no handshake e resolve as instâncias que o
@@ -6,7 +7,8 @@ import { getUser } from "../storage/users-repo.js";
 export function socketAuth() {
   return async (socket, next) => {
     try {
-      const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+      // O handshake carrega o cookie httpOnly automaticamente (withCredentials).
+      const token = readAuthCookie(socket.handshake.headers?.cookie);
       const payload = verifyAuthToken(token);
       if (!payload) return next(new Error("unauthorized"));
       const user = await getUser(payload.sub);

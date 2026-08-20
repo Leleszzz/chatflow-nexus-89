@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { listConversations, getConversation, upsertConversation, archiveConversation, restoreConversation } from "../storage/conversations-repo.js";
+import { listConversations, getConversation, upsertConversation, archiveConversation, restoreConversation, patchConversationCrm } from "../storage/conversations-repo.js";
 import { listMessages } from "../storage/messages-repo.js";
 import { buildConversationId, formatPhone, isPlaceholderName } from "../whatsapp/message-mapper.js";
 import { connectionManager } from "../whatsapp/ConnectionManager.js";
@@ -104,6 +104,17 @@ conversationsRouter.post("/start", async (req, res) => {
   const io = req.app.get("io");
   if (io) io.to(`instance:${instanceId}`).emit("conversation:update", { conversation });
   res.status(prior ? 200 : 201).json(conversation);
+});
+
+// Overlay de CRM da conversa: dono, etapa, tags, IA ligada, proposta de horário.
+// Antes vivia no localStorage de cada navegador, o que fazia o time ver donos e
+// etapas diferentes — e a IA responder ou não conforme a máquina aberta.
+conversationsRouter.patch("/:id/crm", async (req, res) => {
+  const updated = await patchConversationCrm(req.params.id, req.body || {});
+  if (!updated) return res.status(404).json({ error: "conversa não encontrada" });
+  const io = req.app.get("io");
+  if (io) io.to(`instance:${updated.instanceId}`).emit("conversation:update", { conversation: updated });
+  res.json(updated);
 });
 
 conversationsRouter.post("/:id/read", async (req, res) => {

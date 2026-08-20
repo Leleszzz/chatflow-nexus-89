@@ -1,8 +1,90 @@
 import { Router } from "express";
-import { getOpenaiSettings, setOpenaiSettings, clearOpenaiKey } from "../storage/settings-repo.js";
+import {
+  getOpenaiSettings,
+  setOpenaiSettings,
+  clearOpenaiKey,
+  getLeadDistribution,
+  setLeadDistribution,
+  getAgentSchedule,
+  setAgentSchedule,
+  nextAssignCursor,
+  rememberLastAssigned,
+} from "../storage/settings-repo.js";
+import { getConversation, patchConversationCrm, countConversationsAssignedTo } from "../storage/conversations-repo.js";
+import { listUsers } from "../storage/users-repo.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
 export const settingsRouter = Router();
+
+// Configurações de equipe: todos leem (a automação roda no cliente de cada um),
+// só admin escreve. Mesma divisão de /api/stages.
+function broadcast(req, event, payload) {
+  const io = req.app.get("io");
+  if (io) io.emit(event, payload);
+}
+
+settingsRouter.get("/lead-distribution", requireAuth(), async (_req, res) => {
+  res.json(await getLeadDistribution());
+});
+
+settingsRouter.put("/lead-distribution", requireAuth({ admin: true }), async (req, res) => {
+  const updated = await setLeadDistribution(req.body || {});
+  broadcast(req, "lead-distribution:update", { leadDistribution: updated });
+  res.json(updated);
+});
+
+// Escolhe o próximo vendedor do rodízio e já atribui à conversa.
+//
+// Isto roda no SERVIDOR de propósito: com o cursor no navegador, cada aba
+// rodava seu próprio rodízio e o mesmo vendedor recebia repetido. O contador é
+// um $inc atômico, então duas chamadas simultâneas pegam posições diferentes.
+settingsRouter.post("/lead-distribution/next-seller", requireAuth(), async (req, res) => {
+  const conversationId = String(req.body?.conversationId || "");
+  if (!conversationId) return res.status(400).json({ error: "conversationId é obrigatório" });
+
+  const distribution = await getLeadDistribution();
+  if (!distribution.enabled) return res.json({ assigned: null, reason: "distribuicao-desligada" });
+
+  const conversa = await getConversation(conversationId);
+  if (!conversa) return res.status(404).json({ error: "conversa não encontrada" });
+  // Já tem dono: não reatribui (é o mesmo guard do cliente, agora confiável).
+  if (conversa.crm?.sellerId) return res.json({ assigned: null, reason: "ja-atribuida" });
+
+  const users = await listUsers();
+  const elegiveis = users.filter(u =>
+    u.active && u.receivesNewLeads && u.role !== "Administrador"
+    && (!distribution.eligibleUserIds.length || distribution.eligibleUserIds.includes(u.id)));
+  if (!elegiveis.length) return res.json({ assigned: null, reason: "sem-vendedor-elegivel" });
+
+  let escolhido;
+  if (distribution.strategy === "load-balanced") {
+    const cargas = await Promise.all(elegiveis.map(async u => ({
+      user: u,
+      carga: await countConversationsAssignedTo(u.id),
+    })));
+    cargas.sort((a, b) => a.carga - b.carga);
+    escolhido = cargas[0].user;
+  } else {
+    const cursor = await nextAssignCursor();
+    escolhido = elegiveis[(cursor - 1) % elegiveis.length];
+  }
+
+  const updated = await patchConversationCrm(conversationId, { sellerId: escolhido.id });
+  await rememberLastAssigned(escolhido.id);
+  const io = req.app.get("io");
+  if (io && updated) io.to(`instance:${updated.instanceId}`).emit("conversation:update", { conversation: updated });
+  res.json({ assigned: escolhido.id, conversation: updated });
+});
+
+settingsRouter.get("/agent-schedule", requireAuth(), async (_req, res) => {
+  res.json(await getAgentSchedule());
+});
+
+settingsRouter.put("/agent-schedule", requireAuth({ admin: true }), async (req, res) => {
+  const updated = await setAgentSchedule(req.body || {});
+  broadcast(req, "agent-schedule:update", { agentSchedule: updated });
+  res.json(updated);
+});
 
 settingsRouter.get("/openai", requireAuth(), async (_req, res) => {
   const openai = await getOpenaiSettings();

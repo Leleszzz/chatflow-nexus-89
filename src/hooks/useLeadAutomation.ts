@@ -26,15 +26,11 @@ export function useLeadAutomation() {
       );
       const alreadyHasAI = Boolean(linkedDeal?.aiEnabled ?? patch?.aiEnabled);
 
-      let didSomething = false;
-      if (leadDistribution.enabled && !alreadyAssigned) {
-        if (assignNextSeller(wa.id)) didSomething = true;
-      }
-      if (agentSchedule.enabled && !alreadyHasAI) {
-        if (applyScheduledAgentIfActive(wa.id)) didSomething = true;
-      }
+      // A atribuição é resolvida no servidor (cursor atômico do rodízio); aqui
+      // só disparamos. O resultado volta pelo socket.
+      if (leadDistribution.enabled && !alreadyAssigned) assignNextSeller(wa.id);
+      if (agentSchedule.enabled && !alreadyHasAI) applyScheduledAgentIfActive(wa.id);
       processedRef.current.add(wa.id);
-      void didSomething;
     }
   }, [waConversations, conversationPatches, deals, leadDistribution, agentSchedule, assignNextSeller, applyScheduledAgentIfActive]);
 }

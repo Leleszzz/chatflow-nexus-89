@@ -7,6 +7,7 @@ import {
 } from "../storage/users-repo.js";
 import { hashPassword, verifyPassword } from "../lib/password.js";
 import { createAuthToken } from "../lib/auth-token.js";
+import { setAuthCookie, clearAuthCookie } from "../lib/auth-cookie.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
 export const authRouter = Router();
@@ -24,8 +25,15 @@ authRouter.post("/login", async (req, res) => {
   const ok = await verifyPassword(password, user.passwordHash, user.passwordSalt);
   if (!ok) return res.status(401).json({ error: "Usuário ou senha inválidos" });
 
-  const token = createAuthToken(user);
-  res.json({ token, user: sanitizeUser(user) });
+  // O token vai no cookie httpOnly, NÃO no corpo: se voltasse no JSON o front
+  // teria como guardá-lo e o ganho de segurança se perderia.
+  setAuthCookie(res, createAuthToken(user));
+  res.json({ user: sanitizeUser(user) });
+});
+
+authRouter.post("/logout", (_req, res) => {
+  clearAuthCookie(res);
+  res.json({ ok: true });
 });
 
 authRouter.get("/me", requireAuth(), async (req, res) => {

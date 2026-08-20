@@ -1,8 +1,11 @@
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
-import { decodeAuthToken } from "@/lib/auth-token";
+import { createContext, useContext, useEffect, useState, useRef, ReactNode, useCallback, SetStateAction } from "react";
+import type {
+  Appointment, AppointmentType, DealOutcome, SchedulingProposal, CrmPatch,
+  LeadDistribution, LeadDistributionStrategy, DayOfWeek, DaySchedule, AgentSchedule,
+} from "@/lib/mock-data";
 import { Deal, DealStage, Agent, AgentUsage, ALL_TAGS, STAGES, Stage, CustomField, CustomFieldValues } from "@/lib/mock-data";
-import { setApiAuthToken, whatsappApi, UserRecord, ProntuarioAttachment, ProntuarioCategory } from "@/lib/whatsapp-api";
-import { getSocket, setSocketAuthToken } from "@/lib/whatsapp-socket";
+import { whatsappApi, UserRecord, ProntuarioAttachment, ProntuarioCategory } from "@/lib/whatsapp-api";
+import { getSocket, reconnectSocket } from "@/lib/whatsapp-socket";
 
 const inferProntuarioCategory = (
   messageType?: string,
@@ -21,34 +24,15 @@ const inferProntuarioCategory = (
   return "outro";
 };
 
-interface FinishedDeal {
-  dealId: string;
-  result: "venda" | "recusa";
-  amount?: number;
-  description?: string;
-  product?: string;
-  payment?: string;
-  reason?: string;
-  notes?: string;
-  finishedAt: string;
-  operatorId: string;
-}
+// Tipos compartilhados moram em mock-data.ts (o cliente de API também precisa
+// deles). Reexportados aqui porque muita tela importa direto do store.
+export type {
+  Appointment, AppointmentType, DealOutcome, SchedulingProposal, CrmPatch,
+  LeadDistribution, LeadDistributionStrategy, DayOfWeek, DaySchedule, AgentSchedule,
+} from "@/lib/mock-data";
 
-export type AppointmentType = "retorno" | "reuniao" | "follow-up" | "ligacao" | "demonstracao" | "pos-venda" | "retorno-comercial" | "outro";
-
-export interface Appointment {
-  id: string;
-  title: string;
-  dealId: string;
-  date: string;
-  startTime: string;
-  endTime: string;
-  sellerId: string;
-  description: string;
-  type: AppointmentType;
-  status?: "agendado" | "concluido" | "cancelado";
-  origin?: string;
-}
+/** @deprecated use DealOutcome — mantido pelo nome usado nas telas. */
+type FinishedDeal = DealOutcome;
 
 export type TeamUser = {
   id: string;
@@ -67,48 +51,6 @@ export type TeamUser = {
   receivesNewLeads?: boolean;
 };
 
-export type SchedulingProposal = {
-  baseDateIso: string;
-  days: string[];
-  createdAt: string;
-};
-
-export type CrmPatch = {
-  dealId?: string;
-  customer?: string;
-  sellerId?: string;
-  assignedSellerIds?: string[];
-  temperature?: Deal["temperature"];
-  tags?: string[];
-  stage?: string;
-  notes?: string;
-  aiEnabled?: boolean;
-  aiAgentId?: string;
-  schedulingProposal?: SchedulingProposal | null;
-};
-
-export type LeadDistributionStrategy = "round-robin" | "load-balanced";
-
-export type LeadDistribution = {
-  enabled: boolean;
-  strategy: LeadDistributionStrategy;
-  eligibleUserIds: string[];
-  lastAssignedUserId?: string;
-};
-
-export type DayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6;
-
-export type DaySchedule = {
-  enabled: boolean;
-  startTime: string;
-  endTime: string;
-};
-
-export type AgentSchedule = {
-  enabled: boolean;
-  agentId: string;
-  weekly: Record<DayOfWeek, DaySchedule>;
-};
 
 export const WEEKDAY_LABELS: Record<DayOfWeek, string> = {
   0: "Domingo",
@@ -186,7 +128,8 @@ interface CRMCtx {
   updateAppointment: (id: string, patch: Partial<Appointment>) => void;
   removeAppointment: (id: string) => void;
   finished: FinishedDeal[];
-  finishDeal: (f: FinishedDeal) => void;
+  /** `id` e `operatorId` são atribuídos pelo servidor. */
+  finishDeal: (f: Omit<FinishedDeal, "id" | "operatorId"> & { operatorId?: string }) => void;
   agents: Agent[];
   addAgent: (agent: Partial<Agent>) => Promise<Agent | null>;
   updateAgentConfig: (id: string, patch: Partial<Agent>) => Promise<void>;
@@ -199,7 +142,8 @@ interface CRMCtx {
   refreshAgentUsage: () => Promise<void>;
   resetAgentUsage: (agentId: string) => Promise<void>;
   tags: string[];
-  setTags: React.Dispatch<React.SetStateAction<string[]>>;
+  addTag: (name: string) => void;
+  removeTag: (name: string) => void;
   teamUsers: TeamUser[];
   setTeamUsers: React.Dispatch<React.SetStateAction<TeamUser[]>>;
   accountProfile: AccountProfile;
@@ -217,11 +161,11 @@ interface CRMCtx {
   setConversationPatch: (conversationId: string, patch: CrmPatch) => void;
   clearSchedulingProposal: (conversationId: string) => void;
   leadDistribution: LeadDistribution;
-  setLeadDistribution: React.Dispatch<React.SetStateAction<LeadDistribution>>;
+  setLeadDistribution: (value: SetStateAction<LeadDistribution>) => void;
   agentSchedule: AgentSchedule;
-  setAgentSchedule: React.Dispatch<React.SetStateAction<AgentSchedule>>;
+  setAgentSchedule: (value: SetStateAction<AgentSchedule>) => void;
   getEligibleSellers: () => TeamUser[];
-  assignNextSeller: (conversationId: string) => string | null;
+  assignNextSeller: (conversationId: string) => void;
   applyScheduledAgentIfActive: (conversationId: string) => boolean;
   isAgentScheduleActive: (date?: Date) => boolean;
   prontuarios: ProntuarioAttachment[];
@@ -268,13 +212,23 @@ const DEFAULT_PERMISSIONS: Record<string, PermissionKey[]> = {
   Suporte: ["Ver dashboard", "Ver todos os atendimentos", "Ver relatórios"],
 };
 
-const loadStored = <T,>(key: string, fallback: T) => {
+// Chaves do tempo em que o estado do time morava no navegador. Removidas no
+// boot para não deixar lixo — os dados agora vêm todos do banco.
+const LEGACY_STORAGE_KEYS = [
+  "crm-tags",
+  "crm-appointments",
+  "crm-account-profile",
+  "crm-wa-conversation-patches",
+  "crm-lead-distribution",
+  "crm-agent-schedule",
+  "crm-current-user-id",
+  "crm-auth-token",
+];
+
+const clearLegacyStorage = () => {
   try {
-    const stored = window.localStorage.getItem(key);
-    return stored ? JSON.parse(stored) as T : fallback;
-  } catch {
-    return fallback;
-  }
+    for (const key of LEGACY_STORAGE_KEYS) window.localStorage.removeItem(key);
+  } catch { /* modo privado / storage bloqueado */ }
 };
 
 const VALID_MODELS: ReadonlyArray<Agent["model"]> = ["econom", "balanced", "premium"];
@@ -369,62 +323,32 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [agentUsage, setAgentUsage] = useState<Record<string, AgentUsage>>({});
-  const [tags, setTags] = useState<string[]>(() => loadStored("crm-tags", ALL_TAGS));
+  // Tudo abaixo vinha do localStorage e agora nasce vazio, preenchido pelas
+  // rotas assim que o usuário autentica (efeito de carga mais abaixo).
+  const [tags, setTagsState] = useState<string[]>(ALL_TAGS);
   const [stages, setStages] = useState<Stage[]>(STAGES);
-  const [appointments, setAppointments] = useState<Appointment[]>(() => loadStored("crm-appointments", INITIAL_APPOINTMENTS));
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
-  const [authToken, setAuthToken] = useState<string | null>(() => loadStored("crm-auth-token", null));
   const [authReady, setAuthReady] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [accountProfile, setAccountProfile] = useState<AccountProfile>(() => loadStored("crm-account-profile", FALLBACK_ADMIN_PROFILE));
-  const [conversationPatches, setConversationPatches] = useState<Record<string, CrmPatch>>(() => loadStored("crm-wa-conversation-patches", {} as Record<string, CrmPatch>));
-  const [leadDistribution, setLeadDistribution] = useState<LeadDistribution>(() => ({ ...DEFAULT_LEAD_DISTRIBUTION, ...loadStored("crm-lead-distribution", DEFAULT_LEAD_DISTRIBUTION) }));
+  const [accountProfile, setAccountProfile] = useState<AccountProfile>(FALLBACK_ADMIN_PROFILE);
+  // Derivado das conversas (conversations.crm) — ver refreshConversationPatches.
+  const [conversationPatches, setConversationPatches] = useState<Record<string, CrmPatch>>({});
+  const [leadDistribution, setLeadDistributionState] = useState<LeadDistribution>(DEFAULT_LEAD_DISTRIBUTION);
   const [prontuarios, setProntuarios] = useState<ProntuarioAttachment[]>([]);
-  const [agentSchedule, setAgentSchedule] = useState<AgentSchedule>(() => {
-    const stored = loadStored("crm-agent-schedule", DEFAULT_AGENT_SCHEDULE);
-    return { ...DEFAULT_AGENT_SCHEDULE, ...stored, weekly: { ...DEFAULT_AGENT_SCHEDULE.weekly, ...(stored?.weekly || {}) } };
-  });
+  const [agentSchedule, setAgentScheduleState] = useState<AgentSchedule>(DEFAULT_AGENT_SCHEDULE);
+  // Espelhos síncronos: os setters resolvem a forma de updater sem depender do
+  // estado do render atual (nem executar efeito colateral dentro do updater).
+  const leadDistributionRef = useRef(leadDistribution);
+  const agentScheduleRef = useRef(agentSchedule);
+  useEffect(() => { leadDistributionRef.current = leadDistribution; }, [leadDistribution]);
+  useEffect(() => { agentScheduleRef.current = agentSchedule; }, [agentSchedule]);
 
   const currentUser = teamUsers.find(user => user.id === currentUserId && user.active) || null;
   const isAdmin = currentUser?.role === "Administrador";
 
-  useEffect(() => {
-    window.localStorage.setItem("crm-appointments", JSON.stringify(appointments));
-  }, [appointments]);
-
-  useEffect(() => {
-    window.localStorage.setItem("crm-account-profile", JSON.stringify(accountProfile));
-  }, [accountProfile]);
-
-  useEffect(() => {
-    window.localStorage.setItem("crm-tags", JSON.stringify(tags));
-  }, [tags]);
-
-  useEffect(() => {
-    window.localStorage.setItem("crm-wa-conversation-patches", JSON.stringify(conversationPatches));
-  }, [conversationPatches]);
-
-  useEffect(() => {
-    window.localStorage.setItem("crm-lead-distribution", JSON.stringify(leadDistribution));
-  }, [leadDistribution]);
-
-  useEffect(() => {
-    window.localStorage.setItem("crm-agent-schedule", JSON.stringify(agentSchedule));
-  }, [agentSchedule]);
-
-  useEffect(() => {
-    if (authToken) {
-      window.localStorage.setItem("crm-auth-token", JSON.stringify(authToken));
-    } else {
-      window.localStorage.removeItem("crm-auth-token");
-      window.localStorage.removeItem("crm-current-user-id");
-    }
-  }, [authToken]);
-
-  useEffect(() => {
-    setApiAuthToken(authToken);
-    setSocketAuthToken(authToken);
-  }, [authToken]);
+  // Único resquício do localStorage: apagar o que ficou das versões antigas.
+  useEffect(() => { clearLegacyStorage(); }, []);
 
   const refreshTeamUsers = useCallback(async () => {
     try {
@@ -480,6 +404,64 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const refreshTags = useCallback(async () => {
+    try {
+      const list = await whatsappApi.listTags();
+      if (Array.isArray(list)) setTagsState(list);
+    } catch (err) {
+      console.warn("[crm-store] listTags failed", err);
+    }
+  }, []);
+
+  const refreshAppointments = useCallback(async () => {
+    try {
+      const list = await whatsappApi.listAppointments();
+      if (Array.isArray(list)) setAppointments(list);
+    } catch (err) {
+      console.warn("[crm-store] listAppointments failed", err);
+    }
+  }, []);
+
+  const refreshDealOutcomes = useCallback(async () => {
+    try {
+      const list = await whatsappApi.listDealOutcomes();
+      if (Array.isArray(list)) setFinished(list);
+    } catch (err) {
+      console.warn("[crm-store] listDealOutcomes failed", err);
+    }
+  }, []);
+
+  const refreshLeadDistribution = useCallback(async () => {
+    try {
+      setLeadDistributionState(await whatsappApi.getLeadDistribution());
+    } catch (err) {
+      console.warn("[crm-store] getLeadDistribution failed", err);
+    }
+  }, []);
+
+  const refreshAgentSchedule = useCallback(async () => {
+    try {
+      setAgentScheduleState(await whatsappApi.getAgentSchedule());
+    } catch (err) {
+      console.warn("[crm-store] getAgentSchedule failed", err);
+    }
+  }, []);
+
+  // O overlay de CRM vem junto das conversas (conversations.crm). Aqui ele é
+  // reindexado por conversationId, que é o formato que as telas já consomem.
+  const refreshConversationPatches = useCallback(async () => {
+    try {
+      const conversas = await whatsappApi.listConversations();
+      const indexado: Record<string, CrmPatch> = {};
+      for (const conversa of conversas) {
+        if (conversa.crm && Object.keys(conversa.crm).length) indexado[conversa.id] = conversa.crm;
+      }
+      setConversationPatches(indexado);
+    } catch (err) {
+      console.warn("[crm-store] listConversations (crm) failed", err);
+    }
+  }, []);
+
   const refreshAgentUsage = useCallback(async () => {
     try {
       const map = await whatsappApi.getAgentUsage();
@@ -503,43 +485,22 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Com o token em cookie httpOnly o cliente não consegue mais inspecionar a
+  // validade da sessão — e não precisa: perguntar ao /auth/me é a única fonte
+  // confiável. 401 significa simplesmente "não logado".
   useEffect(() => {
     let cancelled = false;
-
-    if (!authToken) {
-      setCurrentUserId(null);
-      setTeamUsers([]);
-      setAuthReady(true);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    const payload = decodeAuthToken(authToken);
-    if (!payload || (payload.exp && payload.exp <= Math.floor(Date.now() / 1000))) {
-      setCurrentUserId(null);
-      setAuthToken(null);
-      setAuthReady(true);
-      return () => {
-        cancelled = true;
-      };
-    }
-
     setAuthReady(false);
     whatsappApi.me()
       .then(({ user }) => {
         if (cancelled) return;
         setCurrentUserId(user.id);
-        setTeamUsers(prev => {
-          if (prev.some(u => u.id === user.id)) return prev;
-          return [...prev, toTeamUser(user)];
-        });
+        setTeamUsers(prev => (prev.some(u => u.id === user.id) ? prev : [...prev, toTeamUser(user)]));
       })
-      .catch(err => {
+      .catch(() => {
         if (cancelled) return;
-        console.warn("[crm-store] /auth/me failed", err);
         setCurrentUserId(null);
-        setAuthToken(null);
+        setTeamUsers([]);
       })
       .finally(() => {
         if (!cancelled) setAuthReady(true);
@@ -548,7 +509,8 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [authToken]);
+    // Roda uma vez: login/logout atualizam currentUserId diretamente.
+  }, []);
 
   useEffect(() => {
     if (!currentUserId) return;
@@ -559,7 +521,15 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     refreshStages();
     refreshAgents();
     refreshCustomFields();
-  }, [currentUserId, refreshTeamUsers, refreshProntuarios, refreshAgentUsage, refreshDeals, refreshStages, refreshAgents, refreshCustomFields]);
+    refreshTags();
+    refreshAppointments();
+    refreshDealOutcomes();
+    refreshLeadDistribution();
+    refreshAgentSchedule();
+    refreshConversationPatches();
+  }, [currentUserId, refreshTeamUsers, refreshProntuarios, refreshAgentUsage, refreshDeals, refreshStages,
+      refreshAgents, refreshCustomFields, refreshTags, refreshAppointments, refreshDealOutcomes,
+      refreshLeadDistribution, refreshAgentSchedule, refreshConversationPatches]);
 
   // Sincronização em tempo real dos cards/etapas (eventos do backend, já filtrados por permissão).
   useEffect(() => {
@@ -589,12 +559,55 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     const onAgents = (payload: { agents: Agent[] }) => {
       if (Array.isArray(payload?.agents)) setAgents(payload.agents.map(normalizeAgent));
     };
+    const onTags = (payload: { tags: string[] }) => {
+      if (Array.isArray(payload?.tags)) setTagsState(payload.tags);
+    };
+    const onLeadDistribution = (payload: { leadDistribution: LeadDistribution }) => {
+      if (payload?.leadDistribution) setLeadDistributionState(payload.leadDistribution);
+    };
+    const onAgentSchedule = (payload: { agentSchedule: AgentSchedule }) => {
+      if (payload?.agentSchedule) setAgentScheduleState(payload.agentSchedule);
+    };
+    const onAppointment = (payload: { appointment: Appointment }) => {
+      const appointment = payload?.appointment;
+      if (!appointment?.id) return;
+      setAppointments(prev => {
+        const idx = prev.findIndex(a => a.id === appointment.id);
+        const next = idx === -1 ? [...prev, appointment] : prev.map(a => (a.id === appointment.id ? appointment : a));
+        return next.sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`));
+      });
+    };
+    const onAppointmentDelete = (payload: { appointmentId: string }) => {
+      if (payload?.appointmentId) setAppointments(prev => prev.filter(a => a.id !== payload.appointmentId));
+    };
+    const onAppointmentWipe = (payload: { dealId: string }) => {
+      if (payload?.dealId) setAppointments(prev => prev.filter(a => a.dealId !== payload.dealId));
+    };
+    const onDealOutcome = (payload: { outcome: DealOutcome }) => {
+      const outcome = payload?.outcome;
+      if (!outcome?.id) return;
+      setFinished(prev => (prev.some(f => f.id === outcome.id) ? prev : [outcome, ...prev]));
+    };
+    // O overlay de CRM chega dentro da própria conversa atualizada.
+    const onConversationCrm = (payload: { conversation: { id: string; crm?: CrmPatch } }) => {
+      const conversa = payload?.conversation;
+      if (!conversa?.id) return;
+      setConversationPatches(prev => ({ ...prev, [conversa.id]: conversa.crm || {} }));
+    };
     socket.on("deal:new", upsertDeal);
     socket.on("deal:update", upsertDeal);
     socket.on("deal:delete", onDealDelete);
     socket.on("stages:update", onStages);
     socket.on("custom-fields:update", onCustomFields);
     socket.on("agents:update", onAgents);
+    socket.on("tags:update", onTags);
+    socket.on("lead-distribution:update", onLeadDistribution);
+    socket.on("agent-schedule:update", onAgentSchedule);
+    socket.on("appointment:update", onAppointment);
+    socket.on("appointment:delete", onAppointmentDelete);
+    socket.on("appointment:wipe", onAppointmentWipe);
+    socket.on("deal-outcome:new", onDealOutcome);
+    socket.on("conversation:update", onConversationCrm);
     return () => {
       socket.off("deal:new", upsertDeal);
       socket.off("deal:update", upsertDeal);
@@ -602,6 +615,14 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       socket.off("stages:update", onStages);
       socket.off("custom-fields:update", onCustomFields);
       socket.off("agents:update", onAgents);
+      socket.off("tags:update", onTags);
+      socket.off("lead-distribution:update", onLeadDistribution);
+      socket.off("agent-schedule:update", onAgentSchedule);
+      socket.off("appointment:update", onAppointment);
+      socket.off("appointment:delete", onAppointmentDelete);
+      socket.off("appointment:wipe", onAppointmentWipe);
+      socket.off("deal-outcome:new", onDealOutcome);
+      socket.off("conversation:update", onConversationCrm);
     };
   }, [currentUserId]);
 
@@ -611,8 +632,8 @@ export function CRMProvider({ children }: { children: ReactNode }) {
 
   const login = async (identifier: string, password: string) => {
     try {
-      const { token, user } = await whatsappApi.login(identifier, password);
-      setAuthToken(token);
+      // O cookie de sessão vem no Set-Cookie da resposta; o corpo traz só o usuário.
+      const { user } = await whatsappApi.login(identifier, password);
       setCurrentUserId(user.id);
       setTeamUsers(prev => {
         const next = prev.filter(u => u.id !== user.id);
@@ -620,6 +641,9 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       });
       setAuthReady(true);
       setAccountProfile(profileFromUser(toTeamUser(user)));
+      // O socket já está conectado com a credencial antiga (nenhuma): reconecta
+      // para o servidor reavaliar o cookie no handshake.
+      reconnectSocket();
       return true;
     } catch (err) {
       console.warn("[crm-store] login failed", err);
@@ -629,8 +653,11 @@ export function CRMProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     setCurrentUserId(null);
-    setAuthToken(null);
     setTeamUsers([]);
+    // Só o servidor consegue apagar um cookie httpOnly.
+    whatsappApi.logout()
+      .catch(err => console.warn("[crm-store] logout failed", err))
+      .finally(reconnectSocket);
   };
 
   const changePassword = async (currentPassword: string, newPassword: string) => {
@@ -768,27 +795,85 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       .catch(err => console.warn("[crm-store] setDealCustomField failed", err));
   };
 
-  const finishDeal = (f: FinishedDeal) => {
-    setFinished(prev => [...prev, f]);
+  // O fechamento agora é persistido por inteiro (valor, produto, pagamento,
+  // motivo). Antes só stage/estimatedValue chegavam ao banco e o resto sumia no
+  // primeiro refresh, zerando Dashboard e Relatórios.
+  const finishDeal = (f: Omit<FinishedDeal, "id" | "operatorId"> & { operatorId?: string }) => {
     const current = deals.find(deal => deal.id === f.dealId);
     const stage = f.result === "venda" ? "fechado" : "perdido";
     const estimatedValue = f.result === "venda" && f.amount !== undefined ? f.amount : current?.estimatedValue;
     setDeals(prev => prev.map(deal => (deal.id === f.dealId ? { ...deal, stage, estimatedValue } : deal)));
-    whatsappApi.updateDeal(f.dealId, { stage, estimatedValue }).catch(err => console.warn("[crm-store] finishDeal failed", err));
+    whatsappApi.updateDeal(f.dealId, { stage, estimatedValue })
+      .catch(err => console.warn("[crm-store] finishDeal (deal) failed", err));
+    // Sem update otimista aqui: o id vem do servidor, e o socket deal-outcome:new
+    // devolve o registro completo — inserir antes duplicaria a linha no relatório.
+    whatsappApi.createDealOutcome(f)
+      .catch(err => { console.warn("[crm-store] finishDeal (outcome) failed", err); refreshDealOutcomes(); });
   };
-  const addAppointment = (appointment: Appointment) =>
-    setAppointments(prev => [...prev, appointment].sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`)));
-  const updateAppointment = (id: string, patch: Partial<Appointment>) =>
-    setAppointments(prev => prev.map(appointment => (appointment.id === id ? { ...appointment, ...patch } : appointment)));
-  const removeAppointment = (id: string) =>
-    setAppointments(prev => prev.filter(appointment => appointment.id !== id));
 
-  const setConversationPatch = (conversationId: string, patch: CrmPatch) =>
+  const addTag = (name: string) => {
+    const clean = name.trim();
+    if (!clean || tags.includes(clean)) return;
+    setTagsState(prev => [...prev, clean]);
+    whatsappApi.createTag(clean).catch(err => { console.warn("[crm-store] createTag failed", err); refreshTags(); });
+  };
+  const removeTag = (name: string) => {
+    setTagsState(prev => prev.filter(tag => tag !== name));
+    whatsappApi.deleteTag(name).catch(err => { console.warn("[crm-store] deleteTag failed", err); refreshTags(); });
+  };
+
+  const addAppointment = (appointment: Appointment) => {
+    setAppointments(prev => [...prev, appointment].sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`)));
+    whatsappApi.createAppointment(appointment)
+      .catch(err => { console.warn("[crm-store] createAppointment failed", err); refreshAppointments(); });
+  };
+  const updateAppointment = (id: string, patch: Partial<Appointment>) => {
+    setAppointments(prev => prev.map(appointment => (appointment.id === id ? { ...appointment, ...patch } : appointment)));
+    whatsappApi.updateAppointment(id, patch)
+      .catch(err => { console.warn("[crm-store] updateAppointment failed", err); refreshAppointments(); });
+  };
+  const removeAppointment = (id: string) => {
+    setAppointments(prev => prev.filter(appointment => appointment.id !== id));
+    whatsappApi.deleteAppointment(id)
+      .catch(err => { console.warn("[crm-store] deleteAppointment failed", err); refreshAppointments(); });
+  };
+
+  // Aceitam tanto um patch quanto a forma de updater do React, porque as telas
+  // de configuração já chamavam `setX(prev => ({ ...prev, campo }))`. O valor
+  // resolvido é gravado no servidor — antes só ia para o localStorage, o que
+  // fazia o botão "Salvar" do agente programado ser puramente decorativo.
+  const setLeadDistribution = (value: SetStateAction<LeadDistribution>) => {
+    const next = typeof value === "function"
+      ? (value as (prev: LeadDistribution) => LeadDistribution)(leadDistributionRef.current)
+      : { ...leadDistributionRef.current, ...value };
+    leadDistributionRef.current = next;
+    setLeadDistributionState(next);
+    whatsappApi.saveLeadDistribution(next)
+      .then(saved => { leadDistributionRef.current = saved; setLeadDistributionState(saved); })
+      .catch(err => { console.warn("[crm-store] saveLeadDistribution failed", err); refreshLeadDistribution(); });
+  };
+  const setAgentSchedule = (value: SetStateAction<AgentSchedule>) => {
+    const next = typeof value === "function"
+      ? (value as (prev: AgentSchedule) => AgentSchedule)(agentScheduleRef.current)
+      : { ...agentScheduleRef.current, ...value };
+    agentScheduleRef.current = next;
+    setAgentScheduleState(next);
+    whatsappApi.saveAgentSchedule(next)
+      .then(saved => { agentScheduleRef.current = saved; setAgentScheduleState(saved); })
+      .catch(err => { console.warn("[crm-store] saveAgentSchedule failed", err); refreshAgentSchedule(); });
+  };
+
+  // Persiste em conversations.crm. O `schedulingProposal: null` continua
+  // significando "remover a chave" — o backend faz $unset.
+  const setConversationPatch = (conversationId: string, patch: CrmPatch) => {
     setConversationPatches(prev => {
       const merged = { ...(prev[conversationId] || {}), ...patch };
       if (patch.schedulingProposal === null) delete merged.schedulingProposal;
       return { ...prev, [conversationId]: merged };
     });
+    whatsappApi.patchConversationCrm(conversationId, patch)
+      .catch(err => console.warn("[crm-store] patchConversationCrm failed", err));
+  };
 
   const clearSchedulingProposal = (conversationId: string) =>
     setConversationPatch(conversationId, { schedulingProposal: null });
@@ -799,38 +884,18 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     return baseEligible.filter(user => leadDistribution.eligibleUserIds.includes(user.id));
   };
 
-  const countAssignedConversations = (userId: string) => {
-    let count = 0;
-    for (const patch of Object.values(conversationPatches)) {
-      const assignees = [patch.sellerId, ...(patch.assignedSellerIds || [])].filter(Boolean);
-      if (assignees.includes(userId)) count += 1;
-    }
-    for (const deal of deals) {
-      if (deal.stage === "fechado" || deal.stage === "perdido") continue;
-      const assignees = [deal.sellerId, ...(deal.assignedSellerIds || [])].filter(Boolean);
-      if (assignees.includes(userId)) count += 1;
-    }
-    return count;
-  };
-
-  const assignNextSeller = (conversationId: string): string | null => {
-    const eligible = getEligibleSellers();
-    if (!eligible.length) return null;
-    let next: TeamUser;
-    if (leadDistribution.strategy === "load-balanced") {
-      const ranked = eligible
-        .map(user => ({ user, load: countAssignedConversations(user.id) }))
-        .sort((a, b) => a.load - b.load);
-      next = ranked[0].user;
-    } else {
-      const lastId = leadDistribution.lastAssignedUserId;
-      const lastIndex = lastId ? eligible.findIndex(user => user.id === lastId) : -1;
-      const nextIndex = (lastIndex + 1) % eligible.length;
-      next = eligible[nextIndex];
-    }
-    setConversationPatch(conversationId, { sellerId: next.id });
-    setLeadDistribution(prev => ({ ...prev, lastAssignedUserId: next.id }));
-    return next.id;
+  // O rodízio é resolvido NO SERVIDOR, com cursor atômico. Fazer a conta aqui
+  // era o bug original: cada navegador tinha o seu "último atribuído" e o mesmo
+  // vendedor recebia repetido. Retorna void — quem sabe o resultado é o socket.
+  const assignNextSeller = (conversationId: string) => {
+    whatsappApi.assignNextSeller(conversationId)
+      .then(({ assigned }) => {
+        if (assigned) setConversationPatches(prev => ({
+          ...prev,
+          [conversationId]: { ...(prev[conversationId] || {}), sellerId: assigned },
+        }));
+      })
+      .catch(err => console.warn("[crm-store] assignNextSeller failed", err));
   };
 
   const applyScheduledAgentIfActive = (conversationId: string): boolean => {
@@ -882,7 +947,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <Ctx.Provider value={{ deals, setDeals, addDeal, removeDeal, moveDeal, updateDeal, stages, addStage, updateStage, moveStage, reorderStage, removeStage, appointments, addAppointment, updateAppointment, removeAppointment, finished, finishDeal, agents, addAgent, updateAgentConfig, removeAgent, customFields, refreshCustomFields, setDealCustomField, agentUsage, refreshAgentUsage, resetAgentUsage: resetAgentUsageRemote, tags, setTags, teamUsers, setTeamUsers, accountProfile, setAccountProfile, currentUser, authReady, isAdmin, login, logout, hasPermission, canViewDeal, changePassword, refreshTeamUsers, conversationPatches, setConversationPatch, clearSchedulingProposal, leadDistribution, setLeadDistribution, agentSchedule, setAgentSchedule, getEligibleSellers, assignNextSeller, applyScheduledAgentIfActive, isAgentScheduleActive, prontuarios, refreshProntuarios, getProntuariosByDeal, linkMessageToProntuario, uploadProntuarioFile, renameProntuario, removeProntuario }}>
+    <Ctx.Provider value={{ deals, setDeals, addDeal, removeDeal, moveDeal, updateDeal, stages, addStage, updateStage, moveStage, reorderStage, removeStage, appointments, addAppointment, updateAppointment, removeAppointment, finished, finishDeal, agents, addAgent, updateAgentConfig, removeAgent, customFields, refreshCustomFields, setDealCustomField, agentUsage, refreshAgentUsage, resetAgentUsage: resetAgentUsageRemote, tags, addTag, removeTag, teamUsers, setTeamUsers, accountProfile, setAccountProfile, currentUser, authReady, isAdmin, login, logout, hasPermission, canViewDeal, changePassword, refreshTeamUsers, conversationPatches, setConversationPatch, clearSchedulingProposal, leadDistribution, setLeadDistribution, agentSchedule, setAgentSchedule, getEligibleSellers, assignNextSeller, applyScheduledAgentIfActive, isAgentScheduleActive, prontuarios, refreshProntuarios, getProntuariosByDeal, linkMessageToProntuario, uploadProntuarioFile, renameProntuario, removeProntuario }}>
       {children}
     </Ctx.Provider>
   );

@@ -47,6 +47,86 @@ export interface Deal {
   customFields?: CustomFieldValues;
 }
 
+// ---- Tipos compartilhados entre store e cliente de API ----
+// Moram aqui (e não no crm-store) porque whatsapp-api.ts precisa deles e o
+// store importa o cliente de API — o caminho inverso seria import circular.
+
+export type AppointmentType = "retorno" | "reuniao" | "follow-up" | "ligacao" | "demonstracao" | "pos-venda" | "retorno-comercial" | "outro";
+
+export interface Appointment {
+  id: string;
+  title: string;
+  dealId: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  sellerId: string;
+  description: string;
+  type: AppointmentType;
+  status?: "agendado" | "concluido" | "cancelado";
+  origin?: string;
+}
+
+export interface DealOutcome {
+  id: string;
+  dealId: string;
+  result: "venda" | "recusa";
+  amount?: number;
+  description?: string;
+  product?: string;
+  payment?: string;
+  reason?: string;
+  notes?: string;
+  finishedAt: string;
+  operatorId: string;
+}
+
+export type SchedulingProposal = {
+  baseDateIso: string;
+  days: string[];
+  createdAt: string;
+};
+
+/** Overlay de CRM da conversa — persistido em conversations.crm. */
+export type CrmPatch = {
+  dealId?: string;
+  customer?: string;
+  sellerId?: string;
+  assignedSellerIds?: string[];
+  temperature?: Temperature;
+  tags?: string[];
+  stage?: string;
+  notes?: string;
+  aiEnabled?: boolean;
+  aiAgentId?: string;
+  schedulingProposal?: SchedulingProposal | null;
+};
+
+export type LeadDistributionStrategy = "round-robin" | "load-balanced";
+
+export type LeadDistribution = {
+  enabled: boolean;
+  strategy: LeadDistributionStrategy;
+  eligibleUserIds: string[];
+  lastAssignedUserId?: string;
+  /** Cursor do rodízio — gerido pelo servidor, o cliente nunca escreve. */
+  assignCursor?: number;
+};
+
+export type DayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+export type DaySchedule = {
+  enabled: boolean;
+  startTime: string;
+  endTime: string;
+};
+
+export type AgentSchedule = {
+  enabled: boolean;
+  agentId: string;
+  weekly: Record<DayOfWeek, DaySchedule>;
+};
+
 export interface AgentUsage {
   promptTokens: number;
   completionTokens: number;

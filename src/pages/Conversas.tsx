@@ -203,7 +203,7 @@ const formatDaySeparator = (d: Date) => {
 };
 
 export default function Conversas() {
-  const { deals, addDeal, updateDeal, currentUser, isAdmin, teamUsers, tags, setTags, stages, agents, hasPermission, conversationPatches: waPatches, setConversationPatch, clearSchedulingProposal, appointments, addAppointment, linkMessageToProntuario } = useCRM();
+  const { deals, addDeal, updateDeal, currentUser, isAdmin, teamUsers, tags, addTag, stages, agents, hasPermission, conversationPatches: waPatches, setConversationPatch, clearSchedulingProposal, appointments, addAppointment, linkMessageToProntuario } = useCRM();
   const { conversations: waConversations, markRead, refresh: refreshConversations } = useWhatsAppConversations();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -297,10 +297,9 @@ export default function Conversas() {
   const sellerOptions = useMemo(() => teamUsers.filter(user => user.active && user.role !== "Administrador"), [teamUsers]);
   const activeAgents = useMemo(() => agents.filter(agent => agent.active), [agents]);
 
-  // Índice dos cards por telefone. O vínculo conversa→card (conversationPatches)
-  // mora no localStorage: em outro navegador — ou depois de limpar o cache — ele
-  // não existe, TODA conversa ficava sem etapa e o filtro de etapas do funil não
-  // achava nada. O telefone é o vínculo que sobrevive a isso.
+  // Índice dos cards por telefone. Rede de segurança para a conversa que ainda
+  // não tem `crm.dealId` gravado (importada antes do vínculo existir, ou criada
+  // fora do fluxo do Kanban): sem isto ela apareceria sem etapa no funil.
   const dealByPhone = useMemo(() => {
     const index = new Map<string, Deal>();
     for (const deal of deals) {
@@ -575,7 +574,7 @@ export default function Conversas() {
   const addTagToConversation = () => {
     const tag = newTag.trim();
     if (!selected || !tag) return;
-    if (!tags.includes(tag)) setTags(current => [...current, tag]);
+    if (!tags.includes(tag)) addTag(tag);
     if (!selected.tags.includes(tag)) updateSelectedConversation({ tags: [...selected.tags, tag] });
     setNewTag("");
     toast.success("Tag aplicada");

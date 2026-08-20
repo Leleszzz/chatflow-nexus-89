@@ -94,6 +94,9 @@ export function useAgentAutoReply() {
           // Sem o lead vinculado o backend não tem onde gravar o que extrair.
           dealId,
         });
+        // O backend recusou (outra aba já estava respondendo, ou a conversa já
+        // tem resposta nossa como última mensagem). Nada foi enviado.
+        if (response?.skipped) return;
         if (response?.extracted && Object.keys(response.extracted).length) {
           // O backend já persistiu e emitiu deal:update; aqui é só o aviso.
           toast.success(`Agente coletou: ${Object.keys(response.extracted).join(", ")}`);

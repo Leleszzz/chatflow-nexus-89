@@ -1,4 +1,7 @@
-import type { Agent, CustomField, CustomFieldType, Deal, Stage } from "@/lib/mock-data";
+import type {
+  Agent, AgentSchedule, Appointment, CrmPatch, CustomField, CustomFieldType,
+  Deal, DealOutcome, LeadDistribution, Stage,
+} from "@/lib/mock-data";
 
 export type InstanceStatus = "ativa" | "desconectada" | "desligada" | "conectando" | "qr-pendente" | "codigo-pendente";
 
@@ -31,6 +34,8 @@ export type WAConversation = {
   unread: boolean;
   unreadCount: number;
   avatarUrl?: string;
+  /** Overlay de CRM da conversa (dono, etapa, tags, IA). Antes: localStorage. */
+  crm?: CrmPatch;
   lastMessageId?: string;
   lastMessageFromMe?: boolean;
   lastMessageAck?: 0 | 1 | 2 | 3 | 4;
@@ -218,28 +223,14 @@ export type UserRecord = {
   receivesNewLeads?: boolean;
 };
 
-// Lido já no carregamento do módulo: os efeitos de página (ex.: useInstances)
-// rodam ANTES do efeito do provider que chama setApiAuthToken, então sem isto o
-// primeiro request de cada reload sairia sem Authorization e tomaria 401.
-function readStoredToken(): string | null {
-  try {
-    const raw = window.localStorage.getItem("crm-auth-token");
-    return raw ? (JSON.parse(raw) as string) : null;
-  } catch {
-    return null;
-  }
-}
-
-let authToken: string | null = readStoredToken();
-
-export function setApiAuthToken(token: string | null) {
-  authToken = token;
-}
+// A sessão vive num cookie httpOnly: o navegador anexa sozinho em toda
+// requisição de mesma origem, desde que `credentials` esteja ligado. Não há
+// mais token em JavaScript — nem para ler, nem para guardar.
+const withCredentials: RequestInit = { credentials: "include" };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json", ...(init?.headers as Record<string, string> || {}) };
-  if (authToken && !headers.Authorization) headers.Authorization = `Bearer ${authToken}`;
-  const res = await fetch(path, { ...init, headers });
+  const res = await fetch(path, { ...withCredentials, ...init, headers });
   if (!res.ok) {
     const text = await res.text();
     let detail = text;
@@ -381,9 +372,7 @@ export const whatsappApi = {
     form.append("chatId", chatId);
     form.append("type", "text");
     form.append("body", body);
-    const headers: Record<string, string> = {};
-    if (authToken) headers.Authorization = `Bearer ${authToken}`;
-    const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/send`, { method: "POST", body: form, headers });
+    const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/send`, { ...withCredentials, method: "POST", body: form });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     return res.json() as Promise<{ ok: true; messageId: string | null; timestamp: number }>;
   },
@@ -393,19 +382,18 @@ export const whatsappApi = {
     form.append("type", type);
     form.append("body", caption);
     form.append("file", file);
-    const headers: Record<string, string> = {};
-    if (authToken) headers.Authorization = `Bearer ${authToken}`;
-    const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/send`, { method: "POST", body: form, headers });
+    const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/send`, { ...withCredentials, method: "POST", body: form });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     return res.json() as Promise<{ ok: true; messageId: string | null; timestamp: number }>;
   },
 
   login: (identifier: string, password: string) =>
-    request<{ token: string; user: UserRecord }>("/api/auth/login", {
+    request<{ user: UserRecord }>("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ identifier, password }),
     }),
   me: () => request<{ user: UserRecord }>("/api/auth/me"),
+  logout: () => request<{ ok: true }>("/api/auth/logout", { method: "POST" }),
   changePassword: (currentPassword: string, newPassword: string) =>
     request<{ ok: true }>("/api/auth/change-password", {
       method: "POST",
@@ -475,9 +463,7 @@ export const whatsappApi = {
   importLeadList: async (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    const headers: Record<string, string> = {};
-    if (authToken) headers.Authorization = `Bearer ${authToken}`;
-    const res = await fetch("/api/leads/import", { method: "POST", body: form, headers });
+    const res = await fetch("/api/leads/import", { ...withCredentials, method: "POST", body: form });
     if (!res.ok) {
       const text = await res.text();
       let detail = text;
@@ -493,9 +479,7 @@ export const whatsappApi = {
     form.append("name", name);
     if (uploadedBy) form.append("uploadedBy", uploadedBy);
     form.append("file", file);
-    const headers: Record<string, string> = {};
-    if (authToken) headers.Authorization = `Bearer ${authToken}`;
-    const res = await fetch("/api/prontuarios/upload", { method: "POST", body: form, headers });
+    const res = await fetch("/api/prontuarios/upload", { ...withCredentials, method: "POST", body: form });
     if (!res.ok) {
       const text = await res.text();
       let detail = text;
@@ -539,6 +523,8 @@ export const whatsappApi = {
       usage?: { promptTokens: number; completionTokens: number; costUsd: number };
       scheduling?: { baseDateIso: string; days: string[] } | null;
       extracted?: Record<string, string | number | null> | null;
+      /** Preenchido quando o backend recusou responder (duplicata). Sem envio. */
+      skipped?: string;
     }>("/api/agents/respond", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -619,4 +605,46 @@ export const whatsappApi = {
     request<Agent>(`/api/agents/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteAgent: (id: string) =>
     request<{ ok: true; agents: Agent[] }>(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // ---- Tags (vocabulário compartilhado do time) ----
+  listTags: () => request<string[]>("/api/tags"),
+  createTag: (name: string) =>
+    request<string[]>("/api/tags", { method: "POST", body: JSON.stringify({ name }) }),
+  deleteTag: (name: string) =>
+    request<{ ok: true; tags: string[] }>(`/api/tags/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+  // ---- Agenda ----
+  listAppointments: () => request<Appointment[]>("/api/appointments"),
+  createAppointment: (appointment: Appointment) =>
+    request<Appointment>("/api/appointments", { method: "POST", body: JSON.stringify(appointment) }),
+  updateAppointment: (id: string, patch: Partial<Appointment>) =>
+    request<Appointment>(`/api/appointments/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteAppointment: (id: string) =>
+    request<{ ok: true }>(`/api/appointments/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // ---- Fechamentos (venda/recusa) ----
+  listDealOutcomes: () => request<DealOutcome[]>("/api/deal-outcomes"),
+  createDealOutcome: (outcome: Omit<DealOutcome, "id" | "operatorId">) =>
+    request<DealOutcome>("/api/deal-outcomes", { method: "POST", body: JSON.stringify(outcome) }),
+
+  // ---- Configurações de equipe ----
+  getLeadDistribution: () => request<LeadDistribution>("/api/settings/lead-distribution"),
+  saveLeadDistribution: (patch: Partial<LeadDistribution>) =>
+    request<LeadDistribution>("/api/settings/lead-distribution", { method: "PUT", body: JSON.stringify(patch) }),
+  // O rodízio é resolvido NO SERVIDOR (cursor atômico) — o cliente só pede o próximo.
+  assignNextSeller: (conversationId: string) =>
+    request<{ assigned: string | null; reason?: string }>("/api/settings/lead-distribution/next-seller", {
+      method: "POST",
+      body: JSON.stringify({ conversationId }),
+    }),
+  getAgentSchedule: () => request<AgentSchedule>("/api/settings/agent-schedule"),
+  saveAgentSchedule: (patch: Partial<AgentSchedule>) =>
+    request<AgentSchedule>("/api/settings/agent-schedule", { method: "PUT", body: JSON.stringify(patch) }),
+
+  // ---- Overlay de CRM da conversa (dono, etapa, tags, IA) ----
+  patchConversationCrm: (conversationId: string, patch: CrmPatch) =>
+    request<WAConversation>(`/api/conversations/${encodeURIComponent(conversationId)}/crm`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
 };

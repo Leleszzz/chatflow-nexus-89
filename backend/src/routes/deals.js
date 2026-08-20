@@ -6,6 +6,8 @@ import {
   patchDeal,
   deleteDeal,
 } from "../storage/deals-repo.js";
+import { deleteAppointmentsByDeal } from "../storage/appointments-repo.js";
+import { deleteOutcomesByDeal } from "../storage/deal-outcomes-repo.js";
 import { canUserSeeDeal } from "../lib/deal-permissions.js";
 import { emitDealEvent } from "../socket/events.js";
 import { requireAuth } from "../middleware/require-auth.js";
@@ -56,7 +58,15 @@ dealsRouter.delete("/:id", requireAuth(), async (req, res) => {
     const prior = await getDeal(req.params.id);
     const removed = await deleteDeal(req.params.id);
     if (!removed) return res.status(404).json({ error: "deal não encontrado" });
-    if (prior) emitDealEvent(req.app.get("io"), "deal:delete", prior);
+    // Cascade no servidor (e não no cliente): agenda e fechamentos do card somem
+    // junto para todo mundo, não só para quem clicou em excluir.
+    const io = req.app.get("io");
+    const [compromissos] = await Promise.all([
+      deleteAppointmentsByDeal(req.params.id),
+      deleteOutcomesByDeal(req.params.id),
+    ]);
+    if (io && compromissos) io.emit("appointment:wipe", { dealId: req.params.id });
+    if (prior) emitDealEvent(io, "deal:delete", prior);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

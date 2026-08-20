@@ -1,14 +1,12 @@
 import { verifyAuthToken } from "../lib/auth-token.js";
+import { readAuthCookie } from "../lib/auth-cookie.js";
 import { getUser } from "../storage/users-repo.js";
 
 export function requireAuth(options = {}) {
   const { admin = false } = options;
   return async (req, res, next) => {
-    const header = req.headers.authorization || req.headers.Authorization;
-    if (!header || !header.startsWith("Bearer ")) {
-      return res.status(401).json({ error: "Token ausente" });
-    }
-    const token = header.slice("Bearer ".length).trim();
+    const token = readAuthCookie(req.headers.cookie);
+    if (!token) return res.status(401).json({ error: "Token ausente" });
     const payload = verifyAuthToken(token);
     if (!payload) return res.status(401).json({ error: "Token inválido ou expirado" });
 

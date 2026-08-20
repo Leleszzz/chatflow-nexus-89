@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { getOpenaiSettings } from "../storage/settings-repo.js";
 import { requireAuth } from "../middleware/require-auth.js";
+import { acquireRespondLock, releaseRespondLock, respondLockKey, isAlreadyAnswered } from "./agent-dedupe.js";
 import { connectionManager } from "../whatsapp/ConnectionManager.js";
 import { listMessages } from "../storage/messages-repo.js";
 import { finalizeOutgoingMessage } from "../whatsapp/outgoing.js";
@@ -19,6 +20,18 @@ const MODEL_MAP = {
 };
 
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
+
+// Resposta de "não fiz nada", com o mesmo formato do caminho normal para o
+// cliente não precisar de tratamento especial nem exibir erro.
+const skippedRespond = model => ({
+  ok: true,
+  reply: "",
+  messageId: null,
+  model: MODEL_MAP[model] || DEFAULT_OPENAI_MODEL,
+  usage: { promptTokens: 0, completionTokens: 0, costUsd: 0 },
+  scheduling: null,
+  extracted: null,
+});
 
 const PRICING = {
   "gpt-4o-mini": { in: 0.15 / 1e6, out: 0.60 / 1e6 },
@@ -274,6 +287,18 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
   const client = connectionManager.get(instanceId);
   if (!client) return res.status(404).json({ error: "instância não conectada" });
 
+  // Duas abas abertas disparam dois /respond para a mesma conversa (ver
+  // agent-dedupe.js). Esta é a trava do caso concorrente.
+  const lockKey = respondLockKey(instanceId, chatId);
+  if (!acquireRespondLock(lockKey)) {
+    return res.json({ ...skippedRespond(model), skipped: "resposta-em-andamento" });
+  }
+  // "close" libera em qualquer saída (sucesso, erro tratado, conexão caída), o
+  // que evita travar a conversa para sempre. Em troca, se o navegador desistir
+  // no meio da geração a trava sai cedo — quem cobre essa janela estreita é a
+  // verificação de histórico logo abaixo, assim que a primeira resposta chega.
+  res.on("close", () => releaseRespondLock(lockKey));
+
   const { apiKey } = await getOpenaiSettings();
   if (!apiKey) return res.status(400).json({ error: "OpenAI key não configurada" });
 
@@ -284,6 +309,12 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
   const safeLimit = Math.min(50, Math.max(1, Number(contextLimit) || 15));
 
   const history = await listMessages(instanceId, chatId, { limit: safeLimit });
+
+  // Trava do caso sequencial (a outra aba terminou antes desta começar), que
+  // também impede o agente de falar por cima de um humano que assumiu.
+  if (isAlreadyAnswered(history)) {
+    return res.json({ ...skippedRespond(model), skipped: "ultima-mensagem-ja-e-nossa" });
+  }
 
   const effectiveNowIso = typeof nowIso === "string" && nowIso ? nowIso : new Date().toISOString();
   const baseSystem = typeof systemPrompt === "string" ? systemPrompt.trim() : "";

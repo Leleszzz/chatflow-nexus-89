@@ -74,6 +74,56 @@ export async function countConversations(instanceId) {
   return col().countDocuments({ instanceId, isGroup: false, archivedAt: null });
 }
 
+// Campos do overlay de CRM da conversa (antes: localStorage
+// "crm-wa-conversation-patches"). Ficam num sub-documento `crm` para não se
+// misturarem com os metadados que vêm do WhatsApp.
+const CRM_FIELDS = new Set([
+  "dealId", "customer", "sellerId", "assignedSellerIds",
+  "temperature", "tags", "stage", "notes",
+  "aiEnabled", "aiAgentId", "schedulingProposal",
+]);
+
+/**
+ * Aplica um patch parcial em `conversations.crm`.
+ *
+ * Usa $set por chave (`crm.sellerId`) em vez de gravar o objeto inteiro: quem
+ * liga a IA manda só `aiEnabled`, e substituir o sub-documento apagaria o
+ * vendedor e a etapa. Mesma lição do customFields em patchDeal.
+ *
+ * `schedulingProposal: null` REMOVE a chave — é assim que o front sinaliza
+ * "proposta de horário consumida".
+ */
+export async function patchConversationCrm(id, patch) {
+  const set = {};
+  const unset = {};
+  for (const [key, value] of Object.entries(patch || {})) {
+    if (!CRM_FIELDS.has(key)) continue;
+    if (value === null || value === undefined) unset[`crm.${key}`] = "";
+    else set[`crm.${key}`] = value;
+  }
+  if (!Object.keys(set).length && !Object.keys(unset).length) return getConversation(id);
+
+  const update = {};
+  if (Object.keys(set).length) update.$set = set;
+  if (Object.keys(unset).length) update.$unset = unset;
+  const res = await col().findOneAndUpdate(
+    { _id: id },
+    update,
+    { returnDocument: "after", projection: { _id: 0 } },
+  );
+  return res?.value ?? res ?? null;
+}
+
+// Contagem de conversas atribuídas a um usuário — alimenta a estratégia
+// "load-balanced" da distribuição de leads, que antes contava no navegador.
+export async function countConversationsAssignedTo(userId) {
+  if (!userId) return 0;
+  return col().countDocuments({
+    archivedAt: null,
+    $or: [{ "crm.sellerId": userId }, { "crm.assignedSellerIds": userId }],
+  });
+}
+
 // Mescla os campos informados sobre o documento existente (upsert).
 export async function upsertConversation(conversation) {
   const id = conversation.id;

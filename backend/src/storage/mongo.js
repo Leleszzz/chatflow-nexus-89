@@ -55,6 +55,9 @@ export const collections = {
   campaignTargets: "campaign_targets",
   customFields: "custom_fields",
   agents: "agents",
+  tags: "tags",
+  appointments: "appointments",
+  dealOutcomes: "deal_outcomes",
 };
 
 async function ensureIndexes() {
@@ -68,6 +71,12 @@ async function ensureIndexes() {
     getCol(collections.deals).createIndex({ sellerId: 1 }),
     getCol(collections.stages).createIndex({ order: 1 }),
     getCol(collections.customFields).createIndex({ order: 1 }),
+    getCol(collections.tags).createIndex({ order: 1 }),
+    // Agenda: cascade ao excluir o card, e a visão por vendedor/dia do calendário.
+    getCol(collections.appointments).createIndex({ dealId: 1 }),
+    getCol(collections.appointments).createIndex({ sellerId: 1, date: 1 }),
+    getCol(collections.dealOutcomes).createIndex({ dealId: 1 }),
+    getCol(collections.dealOutcomes).createIndex({ operatorId: 1, finishedAt: -1 }),
     getCol(collections.internalThreads).createIndex({ memberIds: 1, lastMessageAt: -1 }),
     getCol(collections.internalMessages).createIndex({ threadId: 1, createdAt: 1 }),
     // Contagem de não-lidas: filtra por remetente diferente e ausência do leitor.

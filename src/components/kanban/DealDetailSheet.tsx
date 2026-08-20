@@ -23,7 +23,7 @@ const formatAppointmentDate = (date: string) => {
 export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
   deal: Deal | null; open: boolean; onOpenChange: (v: boolean) => void; onFinish: () => void;
 }) {
-  const { updateDeal, removeDeal, tags, setTags, teamUsers, isAdmin, appointments, getProntuariosByDeal } = useCRM();
+  const { updateDeal, removeDeal, tags, addTag, removeTag: removeGlobalTag, teamUsers, isAdmin, appointments, getProntuariosByDeal } = useCRM();
   const [newTag, setNewTag] = useState("");
   const navigate = useNavigate();
 
@@ -49,7 +49,7 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
   const createAndAttachTag = () => {
     const tag = newTag.trim();
     if (!tag) return;
-    setTags(prev => Array.from(new Set([...prev, tag])));
+    addTag(tag);
     updateDeal(deal.id, { tags: Array.from(new Set([...deal.tags, tag])) });
     setNewTag("");
     toast.success("Tag vinculada ao lead");
@@ -64,7 +64,7 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
 
   const removeTag = (tag: string) => updateDeal(deal.id, { tags: deal.tags.filter(item => item !== tag) });
   const deleteGlobalTag = (tag: string) => {
-    setTags(prev => prev.filter(item => item !== tag));
+    removeGlobalTag(tag);
     updateDeal(deal.id, { tags: deal.tags.filter(item => item !== tag) });
     toast.success("Tag excluída");
   };
