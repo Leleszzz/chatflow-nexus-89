@@ -13,6 +13,7 @@ import { usersRouter } from "./routes/users.js";
 import { settingsRouter } from "./routes/settings.js";
 import { agentsRouter } from "./routes/agents.js";
 import { prontuariosRouter } from "./routes/prontuarios.js";
+import { consultationsRouter } from "./routes/consultations.js";
 import { scheduledMessagesRouter } from "./routes/scheduled-messages.js";
 import { dealsRouter } from "./routes/deals.js";
 import { stagesRouter } from "./routes/stages.js";
@@ -56,6 +57,7 @@ async function main() {
   app.use("/api/conversations", conversationsRouter);
   app.use("/api/media", mediaRouter);
   app.use("/api/prontuarios", prontuariosRouter);
+  app.use("/api/consultations", consultationsRouter);
   app.use("/api/scheduled-messages", scheduledMessagesRouter);
   app.use("/api/deals", dealsRouter);
   app.use("/api/stages", stagesRouter);

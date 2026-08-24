@@ -15,6 +15,7 @@ import Relatorios from "./pages/Relatorios";
 import Usuarios from "./pages/Usuarios";
 import Configuracoes from "./pages/Configuracoes";
 import Prontuarios from "./pages/Prontuarios";
+import Consultas from "./pages/Consultas";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound.tsx";
 
@@ -32,6 +33,7 @@ const App = () => (
           <Route path="/equipe" element={<Equipe />} />
           <Route path="/calendario" element={<Calendario />} />
           <Route path="/prontuarios" element={<Prontuarios />} />
+          <Route path="/consultas" element={<Consultas />} />
           <Route path="/agentes" element={<Agentes />} />
           <Route path="/instancias" element={<Instancias />} />
           <Route path="/campanhas" element={<Campanhas />} />

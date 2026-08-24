@@ -19,9 +19,9 @@ import {
   DayOfWeek,
   LeadDistributionStrategy,
 } from "@/store/crm-store";
-import { whatsappApi, LeadListStats, QuickReply } from "@/lib/whatsapp-api";
+import { whatsappApi, LeadListStats, QuickReply, TranscriptionStatus, TranscriptionProvider } from "@/lib/whatsapp-api";
 import { TEMPLATE_VARIABLES, renderTemplate, variaveisDesconhecidas } from "@/lib/message-template";
-import { Plus, Trash2, Pencil, KeyRound, Loader2, Upload, FileText, MessageSquareText } from "lucide-react";
+import { Plus, Trash2, Pencil, KeyRound, Loader2, Upload, FileText, MessageSquareText, Stethoscope } from "lucide-react";
 import { toast } from "sonner";
 
 const ROLES = ["Administrador", "Vendedora", "Financeiro", "Somente leitura"];
@@ -89,6 +89,9 @@ export default function Configuracoes() {
   const [openaiInput, setOpenaiInput] = useState("");
   const [openaiSaving, setOpenaiSaving] = useState(false);
   const [openaiLoading, setOpenaiLoading] = useState(true);
+  const [transcription, setTranscription] = useState<TranscriptionStatus | null>(null);
+  const [transcriptionKey, setTranscriptionKey] = useState("");
+  const [transcriptionSaving, setTranscriptionSaving] = useState(false);
 
   const [leadStats, setLeadStats] = useState<LeadListStats>({ total: 0, ultimaImportacao: "" });
   const [leadImporting, setLeadImporting] = useState(false);
@@ -106,6 +109,9 @@ export default function Configuracoes() {
       .then(status => { if (!cancelled) setOpenaiConfigured(status.configured); })
       .catch(() => {})
       .finally(() => { if (!cancelled) setOpenaiLoading(false); });
+    whatsappApi.getTranscriptionStatus()
+      .then(status => { if (!cancelled) setTranscription(status); })
+      .catch(() => {});
     whatsappApi.leadListStats()
       .then(stats => { if (!cancelled) setLeadStats(stats); })
       .catch(() => {});
@@ -302,6 +308,33 @@ export default function Configuracoes() {
     }
   };
 
+  const salvarTranscricao = async (patch: Parameters<typeof whatsappApi.saveTranscriptionSettings>[0]) => {
+    setTranscriptionSaving(true);
+    try {
+      const atualizado = await whatsappApi.saveTranscriptionSettings(patch);
+      setTranscription(atualizado);
+      setTranscriptionKey("");
+      toast.success("Configuração de transcrição salva");
+    } catch (err) {
+      toast.error((err as Error).message || "Falha ao salvar");
+    } finally {
+      setTranscriptionSaving(false);
+    }
+  };
+
+  const removerChaveTranscricao = async (provider: TranscriptionProvider) => {
+    if (!window.confirm("Remover esta chave? A gravação de consultas para de funcionar até salvar uma nova.")) return;
+    setTranscriptionSaving(true);
+    try {
+      setTranscription(await whatsappApi.deleteTranscriptionKey(provider));
+      toast.success("Chave removida");
+    } catch (err) {
+      toast.error((err as Error).message || "Falha ao remover");
+    } finally {
+      setTranscriptionSaving(false);
+    }
+  };
+
   const openNewQuickReply = () => {
     setQrEditing({ id: null, titulo: "", corpo: "" });
     setQrDialogOpen(true);
@@ -419,6 +452,7 @@ export default function Configuracoes() {
           <TabsTrigger value="users">Usuários</TabsTrigger>
           <TabsTrigger value="automation">Distribuição & Agente</TabsTrigger>
           <TabsTrigger value="openai">OpenAI</TabsTrigger>
+          <TabsTrigger value="transcricao">Transcrição</TabsTrigger>
           <TabsTrigger value="leads">Lista de leads</TabsTrigger>
           <TabsTrigger value="mensagens">Mensagens rápidas</TabsTrigger>
           <TabsTrigger value="campos">Campos do lead</TabsTrigger>
@@ -717,6 +751,129 @@ export default function Configuracoes() {
               </Button>
             )}
           </div>
+        </TabsContent>
+
+        <TabsContent value="transcricao" className="card-elevated p-6 mt-4 max-w-2xl space-y-4">
+          <div>
+            <h3 className="font-display font-bold flex items-center gap-2">
+              <Stethoscope className="h-4 w-4 text-primary" /> Transcrição de consultas
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              Define quem transcreve o áudio das consultas gravadas em Consultas e separa quem está falando.
+              A chave fica no servidor e nunca volta para o navegador.
+            </p>
+          </div>
+
+          {!transcription ? (
+            <div className="rounded-xl border border-border/60 bg-secondary/40 p-3 text-sm text-muted-foreground">
+              Carregando…
+            </div>
+          ) : (
+            <>
+              <div className="space-y-3">
+                <Label>Motor de transcrição</Label>
+                <RadioGroup
+                  value={transcription.provider}
+                  onValueChange={value => salvarTranscricao({ provider: value as TranscriptionProvider })}
+                  className="gap-3"
+                >
+                  <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/60 p-3">
+                    <RadioGroupItem value="groq" id="motor-groq" className="mt-1" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium">Groq — Whisper large-v3 turbo</div>
+                      <p className="text-xs text-muted-foreground">
+                        Grátis até 8h de áudio por dia, depois US$ 0,04/hora. Quem separa os falantes é o
+                        GPT lendo a transcrição, então a divisão entre as pessoas é aproximada.
+                      </p>
+                      <div className="mt-1 text-xs">
+                        {transcription.groqConfigured
+                          ? <span className="font-semibold text-success">Chave configurada</span>
+                          : <span className="font-semibold text-warning">Sem chave</span>}
+                      </div>
+                    </div>
+                  </label>
+                  <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border/60 p-3">
+                    <RadioGroupItem value="assemblyai" id="motor-assemblyai" className="mt-1" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium">AssemblyAI — diarização nativa</div>
+                      <p className="text-xs text-muted-foreground">
+                        US$ 0,17/hora (~R$ 0,46 por consulta de 30 min). Separa as pessoas pela voz, não
+                        pelo texto — mais confiável, e reconhece um acompanhante na sala.
+                      </p>
+                      <div className="mt-1 text-xs">
+                        {transcription.assemblyaiConfigured
+                          ? <span className="font-semibold text-success">Chave configurada</span>
+                          : <span className="font-semibold text-warning">Sem chave</span>}
+                      </div>
+                    </div>
+                  </label>
+                </RadioGroup>
+              </div>
+
+              <Separator />
+
+              <div>
+                <Label htmlFor="transcription-key">
+                  Chave da API {transcription.provider === "groq" ? "do Groq" : "da AssemblyAI"}
+                </Label>
+                <Input
+                  id="transcription-key"
+                  type="password"
+                  placeholder={transcription.provider === "groq" ? "gsk_..." : "chave da AssemblyAI"}
+                  value={transcriptionKey}
+                  onChange={event => setTranscriptionKey(event.target.value)}
+                  autoComplete="off"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {transcription.provider === "groq"
+                    ? "Crie em console.groq.com/keys — o plano gratuito já serve."
+                    : "Crie em assemblyai.com/app — exige cartão cadastrado."}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  className="bg-gradient-primary gap-2"
+                  disabled={transcriptionSaving || !transcriptionKey.trim()}
+                  onClick={() => salvarTranscricao(
+                    transcription.provider === "groq"
+                      ? { groqApiKey: transcriptionKey.trim() }
+                      : { assemblyaiApiKey: transcriptionKey.trim() },
+                  )}
+                >
+                  {transcriptionSaving && <Loader2 className="h-4 w-4 animate-spin" />} Salvar chave
+                </Button>
+                {(transcription.provider === "groq" ? transcription.groqConfigured : transcription.assemblyaiConfigured) && (
+                  <Button
+                    variant="outline"
+                    disabled={transcriptionSaving}
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => removerChaveTranscricao(transcription.provider)}
+                  >
+                    Remover chave
+                  </Button>
+                )}
+              </div>
+
+              <Separator />
+
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <Label htmlFor="auto-summary">Resumo clínico automático</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Gera queixa, histórico, avaliação e conduta logo depois de transcrever. Usa a chave da
+                    OpenAI da outra aba e custa cerca de R$ 0,03 por consulta.
+                  </p>
+                </div>
+                <Switch
+                  id="auto-summary"
+                  checked={transcription.autoSummary}
+                  disabled={transcriptionSaving}
+                  onCheckedChange={checked => salvarTranscricao({ autoSummary: checked })}
+                />
+              </div>
+            </>
+          )}
         </TabsContent>
 
         <TabsContent value="leads" className="card-elevated p-6 mt-4 max-w-2xl space-y-4">

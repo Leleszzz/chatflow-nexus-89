@@ -41,6 +41,7 @@ export const collections = {
   messages: "messages",
   instances: "instances",
   prontuarios: "prontuarios",
+  consultations: "consultations",
   scheduledMessages: "scheduled_messages",
   settings: "settings",
   agentUsage: "agent_usage",
@@ -65,6 +66,10 @@ async function ensureIndexes() {
     getCol(collections.conversations).createIndex({ instanceId: 1, lastInteraction: -1 }),
     getCol(collections.messages).createIndex({ instanceId: 1, chatId: 1, timestamp: 1 }),
     getCol(collections.prontuarios).createIndex({ dealId: 1 }),
+    // Consultas gravadas: a lista por cliente é sempre a mais recente primeiro,
+    // e o filtro por status acha as que ficaram penduradas em "processando".
+    getCol(collections.consultations).createIndex({ dealId: 1, recordedAt: -1 }),
+    getCol(collections.consultations).createIndex({ status: 1 }),
     getCol(collections.scheduledMessages).createIndex({ conversationId: 1 }),
     getCol(collections.scheduledMessages).createIndex({ status: 1, scheduledAt: 1 }),
     getCol(collections.deals).createIndex({ stage: 1 }),

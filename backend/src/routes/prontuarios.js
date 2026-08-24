@@ -2,6 +2,9 @@ import { Router } from "express";
 import multer from "multer";
 import fs from "node:fs/promises";
 import { saveMedia } from "../storage/media-repo.js";
+import { getDeal } from "../storage/deals-repo.js";
+import { canUserSeeDeal } from "../lib/deal-permissions.js";
+import { requireAuth } from "../middleware/require-auth.js";
 import {
   listProntuarios,
   getProntuario,
@@ -24,31 +27,67 @@ function inferCategoryFromMime(mimeType) {
   return "outro";
 }
 
+// O anexo herda a permissão do card a que pertence: quem não pode ver o lead
+// não pode ver, alterar nem apagar os arquivos do prontuário dele. Um deal que
+// já não existe libera o acesso — é lixo órfão, e travá-lo só impediria a
+// limpeza.
+async function podeAcessarDeal(user, dealId) {
+  const deal = await getDeal(dealId);
+  return !deal || canUserSeeDeal(user, deal);
+}
+
+async function assertAcesso(req, res, anexo) {
+  if (!anexo) {
+    res.status(404).json({ error: "prontuário não encontrado" });
+    return false;
+  }
+  if (!(await podeAcessarDeal(req.user, anexo.dealId))) {
+    res.status(403).json({ error: "sem permissão para este prontuário" });
+    return false;
+  }
+  return true;
+}
+
 export const prontuariosRouter = Router();
 
-prontuariosRouter.get("/", async (req, res) => {
+prontuariosRouter.get("/", requireAuth(), async (req, res) => {
   try {
     const dealId = req.query.dealId ? String(req.query.dealId) : undefined;
     const items = await listProntuarios({ dealId });
-    res.json(items);
+    // Filtro no servidor, como faz GET /api/deals — sem ele a lista sem dealId
+    // devolveria os arquivos de todos os clientes para qualquer vendedor.
+    const cache = new Map();
+    const visiveis = [];
+    for (const item of items) {
+      if (!cache.has(item.dealId)) cache.set(item.dealId, await podeAcessarDeal(req.user, item.dealId));
+      if (cache.get(item.dealId)) visiveis.push(item);
+    }
+    res.json(visiveis);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-prontuariosRouter.get("/:id", async (req, res) => {
-  const item = await getProntuario(req.params.id);
-  if (!item) return res.status(404).json({ error: "prontuário não encontrado" });
-  res.json(item);
+prontuariosRouter.get("/:id", requireAuth(), async (req, res) => {
+  try {
+    const item = await getProntuario(req.params.id);
+    if (!(await assertAcesso(req, res, item))) return;
+    res.json(item);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-prontuariosRouter.post("/", async (req, res) => {
+prontuariosRouter.post("/", requireAuth(), async (req, res) => {
   try {
     const body = req.body || {};
     const dealId = String(body.dealId || "").trim();
     const mediaUrl = String(body.mediaUrl || "").trim();
     if (!dealId) return res.status(400).json({ error: "dealId é obrigatório" });
     if (!mediaUrl) return res.status(400).json({ error: "mediaUrl é obrigatório" });
+    if (!(await podeAcessarDeal(req.user, dealId))) {
+      return res.status(403).json({ error: "sem permissão para este cliente" });
+    }
 
     const category = VALID_CATEGORIES.has(body.category) ? body.category : inferCategoryFromMime(body.mediaMime);
 
@@ -62,7 +101,8 @@ prontuariosRouter.post("/", async (req, res) => {
       messageId: body.messageId,
       instanceId: body.instanceId,
       source: body.source === "upload" ? "upload" : "whatsapp",
-      uploadedBy: body.uploadedBy,
+      // Quem enviou é quem está autenticado, e não o que o cliente disser.
+      uploadedBy: req.user.id,
     });
     res.status(201).json(record);
   } catch (err) {
@@ -70,11 +110,16 @@ prontuariosRouter.post("/", async (req, res) => {
   }
 });
 
-prontuariosRouter.post("/upload", upload.single("file"), async (req, res) => {
+// requireAuth ANTES do multer: requisição não autenticada não grava arquivo em
+// disco. Mesmo motivo do comentário em routes/send.js.
+prontuariosRouter.post("/upload", requireAuth(), upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "file é obrigatório" });
   try {
     const dealId = String(req.body?.dealId || "").trim();
     if (!dealId) return res.status(400).json({ error: "dealId é obrigatório" });
+    if (!(await podeAcessarDeal(req.user, dealId))) {
+      return res.status(403).json({ error: "sem permissão para este cliente" });
+    }
 
     const name = String(req.body?.name || req.file.originalname || "Sem nome").trim();
     const buffer = await fs.readFile(req.file.path);
@@ -91,7 +136,7 @@ prontuariosRouter.post("/upload", upload.single("file"), async (req, res) => {
       category,
       fileSize: req.file.size,
       source: "upload",
-      uploadedBy: req.body?.uploadedBy,
+      uploadedBy: req.user.id,
     });
     res.status(201).json(record);
   } catch (err) {
@@ -101,16 +146,16 @@ prontuariosRouter.post("/upload", upload.single("file"), async (req, res) => {
   }
 });
 
-prontuariosRouter.patch("/:id", async (req, res) => {
+prontuariosRouter.patch("/:id", requireAuth(), async (req, res) => {
   try {
+    const current = await getProntuario(req.params.id);
+    if (!(await assertAcesso(req, res, current))) return;
+
     const patch = {};
     if (typeof req.body?.name === "string") patch.name = req.body.name;
     if (VALID_CATEGORIES.has(req.body?.category)) patch.category = req.body.category;
-    if (Object.keys(patch).length === 0) {
-      const current = await getProntuario(req.params.id);
-      if (!current) return res.status(404).json({ error: "prontuário não encontrado" });
-      return res.json(current);
-    }
+    if (Object.keys(patch).length === 0) return res.json(current);
+
     const updated = await updateProntuario(req.params.id, patch);
     if (!updated) return res.status(404).json({ error: "prontuário não encontrado" });
     res.json(updated);
@@ -119,8 +164,10 @@ prontuariosRouter.patch("/:id", async (req, res) => {
   }
 });
 
-prontuariosRouter.delete("/:id", async (req, res) => {
+prontuariosRouter.delete("/:id", requireAuth(), async (req, res) => {
   try {
+    const current = await getProntuario(req.params.id);
+    if (!(await assertAcesso(req, res, current))) return;
     const removed = await deleteProntuario(req.params.id);
     if (!removed) return res.status(404).json({ error: "prontuário não encontrado" });
     res.json({ ok: true });
@@ -129,8 +176,11 @@ prontuariosRouter.delete("/:id", async (req, res) => {
   }
 });
 
-prontuariosRouter.delete("/by-deal/:dealId", async (req, res) => {
+prontuariosRouter.delete("/by-deal/:dealId", requireAuth(), async (req, res) => {
   try {
+    if (!(await podeAcessarDeal(req.user, req.params.dealId))) {
+      return res.status(403).json({ error: "sem permissão para este cliente" });
+    }
     const count = await deleteProntuariosByDeal(req.params.dealId);
     res.json({ ok: true, removed: count });
   } catch (err) {

@@ -4,7 +4,7 @@ import type {
   LeadDistribution, LeadDistributionStrategy, DayOfWeek, DaySchedule, AgentSchedule,
 } from "@/lib/mock-data";
 import { Deal, DealStage, Agent, AgentUsage, ALL_TAGS, STAGES, Stage, CustomField, CustomFieldValues } from "@/lib/mock-data";
-import { whatsappApi, UserRecord, ProntuarioAttachment, ProntuarioCategory } from "@/lib/whatsapp-api";
+import { whatsappApi, UserRecord, ProntuarioAttachment, ProntuarioCategory, Consultation } from "@/lib/whatsapp-api";
 import { getSocket, reconnectSocket } from "@/lib/whatsapp-socket";
 
 const inferProntuarioCategory = (
@@ -184,6 +184,10 @@ interface CRMCtx {
   uploadProntuarioFile: (input: { dealId: string; name: string; file: File }) => Promise<ProntuarioAttachment>;
   renameProntuario: (id: string, name: string) => Promise<void>;
   removeProntuario: (id: string) => Promise<void>;
+  consultations: Consultation[];
+  refreshConsultations: () => Promise<void>;
+  getConsultationsByDeal: (dealId: string) => Consultation[];
+  removeConsultation: (id: string) => Promise<void>;
 }
 
 const Ctx = createContext<CRMCtx | null>(null);
@@ -336,6 +340,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   const [conversationPatches, setConversationPatches] = useState<Record<string, CrmPatch>>({});
   const [leadDistribution, setLeadDistributionState] = useState<LeadDistribution>(DEFAULT_LEAD_DISTRIBUTION);
   const [prontuarios, setProntuarios] = useState<ProntuarioAttachment[]>([]);
+  const [consultations, setConsultations] = useState<Consultation[]>([]);
   const [agentSchedule, setAgentScheduleState] = useState<AgentSchedule>(DEFAULT_AGENT_SCHEDULE);
   // Espelhos síncronos: os setters resolvem a forma de updater sem depender do
   // estado do render atual (nem executar efeito colateral dentro do updater).
@@ -365,6 +370,15 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       setProntuarios(list);
     } catch (err) {
       console.warn("[crm-store] listProntuarios failed", err);
+    }
+  }, []);
+
+  const refreshConsultations = useCallback(async () => {
+    try {
+      const list = await whatsappApi.listConsultations();
+      setConsultations(list);
+    } catch (err) {
+      console.warn("[crm-store] listConsultations failed", err);
     }
   }, []);
 
@@ -516,6 +530,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     if (!currentUserId) return;
     refreshTeamUsers();
     refreshProntuarios();
+    refreshConsultations();
     refreshAgentUsage();
     refreshDeals();
     refreshStages();
@@ -527,7 +542,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     refreshLeadDistribution();
     refreshAgentSchedule();
     refreshConversationPatches();
-  }, [currentUserId, refreshTeamUsers, refreshProntuarios, refreshAgentUsage, refreshDeals, refreshStages,
+  }, [currentUserId, refreshTeamUsers, refreshProntuarios, refreshConsultations, refreshAgentUsage, refreshDeals, refreshStages,
       refreshAgents, refreshCustomFields, refreshTags, refreshAppointments, refreshDealOutcomes,
       refreshLeadDistribution, refreshAgentSchedule, refreshConversationPatches]);
 
@@ -594,6 +609,23 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       if (!conversa?.id) return;
       setConversationPatches(prev => ({ ...prev, [conversa.id]: conversa.crm || {} }));
     };
+    // A transcrição chega segundos ou minutos depois do upload: sem este
+    // evento o médico ficaria olhando "processando" até dar F5.
+    const onConsultation = (payload: { consultation: Consultation }) => {
+      const consultation = payload?.consultation;
+      if (!consultation?.id) return;
+      setConsultations(prev => {
+        const idx = prev.findIndex(c => c.id === consultation.id);
+        if (idx === -1) return [consultation, ...prev];
+        const next = prev.slice();
+        next[idx] = consultation;
+        return next;
+      });
+    };
+    const onConsultationDelete = (payload: { consultation: Consultation }) => {
+      const id = payload?.consultation?.id;
+      if (id) setConsultations(prev => prev.filter(c => c.id !== id));
+    };
     socket.on("deal:new", upsertDeal);
     socket.on("deal:update", upsertDeal);
     socket.on("deal:delete", onDealDelete);
@@ -608,6 +640,8 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     socket.on("appointment:wipe", onAppointmentWipe);
     socket.on("deal-outcome:new", onDealOutcome);
     socket.on("conversation:update", onConversationCrm);
+    socket.on("consultation:update", onConsultation);
+    socket.on("consultation:delete", onConsultationDelete);
     return () => {
       socket.off("deal:new", upsertDeal);
       socket.off("deal:update", upsertDeal);
@@ -623,6 +657,8 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       socket.off("appointment:wipe", onAppointmentWipe);
       socket.off("deal-outcome:new", onDealOutcome);
       socket.off("conversation:update", onConversationCrm);
+      socket.off("consultation:update", onConsultation);
+      socket.off("consultation:delete", onConsultationDelete);
     };
   }, [currentUserId]);
 
@@ -692,6 +728,21 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     setDeals(prev => prev.filter(deal => deal.id !== id));
     setAppointments(prev => prev.filter(appointment => appointment.dealId !== id));
     setProntuarios(prev => prev.filter(p => p.dealId !== id));
+    setConsultations(prev => prev.filter(c => c.dealId !== id));
+    // Solta o vínculo conversa→card já no cliente (o servidor faz o mesmo e
+    // avisa por socket): sem isto a conversa continuaria apontando para um card
+    // que não existe mais e ficaria sem como criar outro.
+    setConversationPatches(prev => {
+      let mudou = false;
+      const next: Record<string, CrmPatch> = {};
+      for (const [conversationId, patch] of Object.entries(prev)) {
+        if (patch?.dealId !== id) { next[conversationId] = patch; continue; }
+        const { dealId, ...resto } = patch;
+        next[conversationId] = resto;
+        mudou = true;
+      }
+      return mudou ? next : prev;
+    });
     whatsappApi.deleteDeal(id).catch(err => console.warn("[crm-store] deleteDeal failed", err));
     whatsappApi.deleteProntuariosByDeal(id).catch(err => {
       console.warn("[crm-store] deleteProntuariosByDeal failed", err);
@@ -936,6 +987,20 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     return created;
   };
 
+  const getConsultationsByDeal = useCallback(
+    (dealId: string) => consultations.filter(c => c.dealId === dealId),
+    [consultations],
+  );
+
+  const removeConsultation: CRMCtx["removeConsultation"] = async id => {
+    const prontuarioId = consultations.find(c => c.id === id)?.prontuarioId;
+    await whatsappApi.deleteConsultation(id);
+    setConsultations(prev => prev.filter(c => c.id !== id));
+    // O anexo espelho é apagado junto no servidor; sai da lista local também
+    // para o prontuário não mostrar um áudio que já não existe.
+    if (prontuarioId) setProntuarios(prev => prev.filter(p => p.id !== prontuarioId));
+  };
+
   const renameProntuario: CRMCtx["renameProntuario"] = async (id, name) => {
     const updated = await whatsappApi.renameProntuario(id, name);
     setProntuarios(prev => prev.map(p => (p.id === id ? updated : p)));
@@ -947,7 +1012,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <Ctx.Provider value={{ deals, setDeals, addDeal, removeDeal, moveDeal, updateDeal, stages, addStage, updateStage, moveStage, reorderStage, removeStage, appointments, addAppointment, updateAppointment, removeAppointment, finished, finishDeal, agents, addAgent, updateAgentConfig, removeAgent, customFields, refreshCustomFields, setDealCustomField, agentUsage, refreshAgentUsage, resetAgentUsage: resetAgentUsageRemote, tags, addTag, removeTag, teamUsers, setTeamUsers, accountProfile, setAccountProfile, currentUser, authReady, isAdmin, login, logout, hasPermission, canViewDeal, changePassword, refreshTeamUsers, conversationPatches, setConversationPatch, clearSchedulingProposal, leadDistribution, setLeadDistribution, agentSchedule, setAgentSchedule, getEligibleSellers, assignNextSeller, applyScheduledAgentIfActive, isAgentScheduleActive, prontuarios, refreshProntuarios, getProntuariosByDeal, linkMessageToProntuario, uploadProntuarioFile, renameProntuario, removeProntuario }}>
+    <Ctx.Provider value={{ deals, setDeals, addDeal, removeDeal, moveDeal, updateDeal, stages, addStage, updateStage, moveStage, reorderStage, removeStage, appointments, addAppointment, updateAppointment, removeAppointment, finished, finishDeal, agents, addAgent, updateAgentConfig, removeAgent, customFields, refreshCustomFields, setDealCustomField, agentUsage, refreshAgentUsage, resetAgentUsage: resetAgentUsageRemote, tags, addTag, removeTag, teamUsers, setTeamUsers, accountProfile, setAccountProfile, currentUser, authReady, isAdmin, login, logout, hasPermission, canViewDeal, changePassword, refreshTeamUsers, conversationPatches, setConversationPatch, clearSchedulingProposal, leadDistribution, setLeadDistribution, agentSchedule, setAgentSchedule, getEligibleSellers, assignNextSeller, applyScheduledAgentIfActive, isAgentScheduleActive, prontuarios, refreshProntuarios, getProntuariosByDeal, linkMessageToProntuario, uploadProntuarioFile, renameProntuario, removeProntuario, consultations, refreshConsultations, getConsultationsByDeal, removeConsultation }}>
       {children}
     </Ctx.Provider>
   );

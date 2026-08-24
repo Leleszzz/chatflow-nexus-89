@@ -92,6 +92,69 @@ export type QuickReply = {
   atualizadoEm: string;
 };
 
+export type ConsultationStatus = "processando" | "pronto" | "erro";
+export type SpeakerRole = "medico" | "paciente" | "acompanhante" | "outro";
+export type TranscriptionProvider = "groq" | "assemblyai";
+
+export type ConsultationSegment = {
+  speaker: string;
+  start: number;
+  end: number;
+  text: string;
+};
+
+export type ConsultationSpeaker = {
+  key: string;
+  label: string;
+  role: SpeakerRole;
+};
+
+export type ConsultationSummary = {
+  queixa: string;
+  historico: string;
+  avaliacao: string;
+  conduta: string;
+  geradoEm: string;
+};
+
+export type Consultation = {
+  id: string;
+  dealId: string;
+  title: string;
+  recordedAt: string;
+  durationSec: number;
+  audioUrl: string;
+  audioMime?: string;
+  fileSize?: number;
+  prontuarioId?: string;
+  status: ConsultationStatus;
+  error?: string;
+  provider?: TranscriptionProvider;
+  language?: string;
+  speakers: ConsultationSpeaker[];
+  segments: ConsultationSegment[];
+  transcriptText: string;
+  edited: boolean;
+  summary?: ConsultationSummary;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TranscriptionStatus = {
+  provider: TranscriptionProvider;
+  groqConfigured: boolean;
+  assemblyaiConfigured: boolean;
+  autoSummary: boolean;
+};
+
+export type LeadListRecord = {
+  phoneKey: string;
+  nome: string;
+  documento?: string;
+  telefone: string;
+};
+
 export type ProntuarioCategory = "foto" | "video" | "audio" | "documento" | "outro";
 
 export type ProntuarioAttachment = {
@@ -445,6 +508,91 @@ export const whatsappApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  // ---- Consultas gravadas (áudio + transcrição com falantes) ----
+  listConsultations: (dealId?: string) => {
+    const qs = dealId ? `?dealId=${encodeURIComponent(dealId)}` : "";
+    return request<Consultation[]>(`/api/consultations${qs}`);
+  },
+  getConsultation: (id: string) =>
+    request<Consultation>(`/api/consultations/${encodeURIComponent(id)}`),
+  patchConsultation: (
+    id: string,
+    patch: Partial<Pick<Consultation, "title" | "speakers" | "segments" | "transcriptText">>,
+  ) =>
+    request<Consultation>(`/api/consultations/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  retryConsultation: (id: string) =>
+    request<Consultation>(`/api/consultations/${encodeURIComponent(id)}/retry`, { method: "POST" }),
+  generateConsultationSummary: (id: string) =>
+    request<Consultation>(`/api/consultations/${encodeURIComponent(id)}/summary`, { method: "POST" }),
+  deleteConsultation: (id: string) =>
+    request<{ ok: true }>(`/api/consultations/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  deleteConsultationsByDeal: (dealId: string) =>
+    request<{ ok: true; removed: number }>(`/api/consultations/by-deal/${encodeURIComponent(dealId)}`, {
+      method: "DELETE",
+    }),
+
+  // XMLHttpRequest em vez de fetch só por causa do progresso: o arquivo de uma
+  // consulta longa passa de 15 MB e a tela não pode parecer travada enquanto sobe.
+  uploadConsultation: (
+    payload: { dealId: string; title: string; file: File; durationSec: number; recordedAt: string },
+    onProgress?: (percent: number) => void,
+  ) =>
+    new Promise<Consultation>((resolve, reject) => {
+      const form = new FormData();
+      form.append("dealId", payload.dealId);
+      form.append("title", payload.title);
+      form.append("durationSec", String(payload.durationSec));
+      form.append("recordedAt", payload.recordedAt);
+      form.append("file", payload.file);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/consultations/upload");
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = e => {
+        if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText) as Consultation);
+          } catch {
+            reject(new Error("resposta inválida do servidor"));
+          }
+          return;
+        }
+        let detail = xhr.responseText;
+        try {
+          const parsed = JSON.parse(xhr.responseText);
+          if (parsed?.error) detail = parsed.error;
+        } catch {}
+        reject(new Error(detail || `${xhr.status} ${xhr.statusText}`));
+      };
+      xhr.onerror = () => reject(new Error("falha de rede ao enviar a consulta"));
+      xhr.send(form);
+    }),
+
+  // ---- Configuração da transcrição ----
+  getTranscriptionStatus: () => request<TranscriptionStatus>("/api/settings/transcription"),
+  saveTranscriptionSettings: (patch: {
+    provider?: TranscriptionProvider;
+    groqApiKey?: string;
+    assemblyaiApiKey?: string;
+    autoSummary?: boolean;
+  }) =>
+    request<TranscriptionStatus>("/api/settings/transcription", {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  deleteTranscriptionKey: (provider: TranscriptionProvider) =>
+    request<TranscriptionStatus>(`/api/settings/transcription/${provider}`, { method: "DELETE" }),
+
+  // Procura o cliente na lista importada pelo telefone, para preencher o nome.
+  lookupLeadByPhone: (phone: string) =>
+    request<LeadListRecord | null>(`/api/leads/lookup?phone=${encodeURIComponent(phone)}`),
+
   listQuickReplies: () => request<QuickReply[]>("/api/quick-replies"),
   createQuickReply: (payload: { titulo: string; corpo: string }) =>
     request<QuickReply>("/api/quick-replies", { method: "POST", body: JSON.stringify(payload) }),

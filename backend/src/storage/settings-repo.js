@@ -22,13 +22,24 @@ const DEFAULT_AGENT_SCHEDULE = {
   weekly: { 0: emptyDay(), 1: emptyDay(), 2: emptyDay(), 3: emptyDay(), 4: emptyDay(), 5: emptyDay(), 6: emptyDay() },
 };
 
+// Transcrição de consultas. As duas chaves convivem no mesmo doc para dar para
+// trocar de provedor sem reconfigurar: `provider` decide qual é usada.
+const DEFAULT_TRANSCRIPTION = {
+  provider: "groq",
+  groqApiKey: "",
+  assemblyaiApiKey: "",
+  autoSummary: true,
+};
+
 const DEFAULTS = {
   openai: { apiKey: "", defaultModel: "" },
   leadDistribution: DEFAULT_LEAD_DISTRIBUTION,
   agentSchedule: DEFAULT_AGENT_SCHEDULE,
+  transcription: DEFAULT_TRANSCRIPTION,
 };
 
 const VALID_STRATEGIES = new Set(["round-robin", "load-balanced"]);
+const VALID_PROVIDERS = new Set(["groq", "assemblyai"]);
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export function normalizeLeadDistribution(raw) {
@@ -64,6 +75,16 @@ export function normalizeAgentSchedule(raw) {
   };
 }
 
+export function normalizeTranscription(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  return {
+    provider: VALID_PROVIDERS.has(src.provider) ? src.provider : DEFAULT_TRANSCRIPTION.provider,
+    groqApiKey: String(src.groqApiKey || ""),
+    assemblyaiApiKey: String(src.assemblyaiApiKey || ""),
+    autoSummary: src.autoSummary === undefined ? true : Boolean(src.autoSummary),
+  };
+}
+
 export async function getSettings() {
   const stored = (await col().findOne({ _id: DOC_ID }, { projection: { _id: 0 } })) || {};
   return {
@@ -72,6 +93,7 @@ export async function getSettings() {
     openai: { ...DEFAULTS.openai, ...(stored.openai || {}) },
     leadDistribution: normalizeLeadDistribution(stored.leadDistribution),
     agentSchedule: normalizeAgentSchedule(stored.agentSchedule),
+    transcription: normalizeTranscription(stored.transcription),
   };
 }
 
@@ -89,6 +111,32 @@ export async function setOpenaiSettings(patch) {
 
 export async function clearOpenaiKey() {
   return setOpenaiSettings({ apiKey: "" });
+}
+
+export async function getTranscriptionSettings() {
+  return (await getSettings()).transcription;
+}
+
+// Chave vazia no patch NÃO apaga a chave gravada: a tela manda o formulário
+// inteiro e o campo de chave vem em branco quando o usuário só quis trocar o
+// provedor. Para apagar de verdade existe o clearTranscriptionKey.
+export async function setTranscriptionSettings(patch) {
+  const current = await getTranscriptionSettings();
+  const incoming = { ...(patch || {}) };
+  for (const field of ["groqApiKey", "assemblyaiApiKey"]) {
+    if (!incoming[field]) delete incoming[field];
+  }
+  const next = normalizeTranscription({ ...current, ...incoming });
+  await col().updateOne({ _id: DOC_ID }, { $set: { transcription: next } }, { upsert: true });
+  return next;
+}
+
+export async function clearTranscriptionKey(provider) {
+  const field = provider === "assemblyai" ? "assemblyaiApiKey" : "groqApiKey";
+  const current = await getTranscriptionSettings();
+  const next = normalizeTranscription({ ...current, [field]: "" });
+  await col().updateOne({ _id: DOC_ID }, { $set: { transcription: next } }, { upsert: true });
+  return next;
 }
 
 export async function getLeadDistribution() {

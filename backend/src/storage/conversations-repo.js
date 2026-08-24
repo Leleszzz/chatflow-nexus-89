@@ -114,6 +114,25 @@ export async function patchConversationCrm(id, patch) {
   return res?.value ?? res ?? null;
 }
 
+/**
+ * Desfaz o vínculo conversa→card quando o card é excluído.
+ *
+ * Sem isto a conversa continuava apontando para um dealId morto: como a tela de
+ * Conversas resolve o card por `linkedDeal?.id || crm.dealId`, ela caía no id
+ * fantasma, escondia o botão de criar card e o atendimento ficava preso sem
+ * jeito de voltar para o Kanban.
+ *
+ * Só o vínculo sai — etapa, tags e responsável seguem valendo para a conversa.
+ * Devolve as conversas afetadas para o caller emitir os eventos.
+ */
+export async function clearCrmDealLink(dealId) {
+  if (!dealId) return [];
+  const afetadas = await col().find({ "crm.dealId": String(dealId) }, { projection: { _id: 0, id: 1 } }).toArray();
+  if (!afetadas.length) return [];
+  await col().updateMany({ "crm.dealId": String(dealId) }, { $unset: { "crm.dealId": "" } });
+  return getConversationsByIds(afetadas.map(c => c.id));
+}
+
 // Contagem de conversas atribuídas a um usuário — alimenta a estratégia
 // "load-balanced" da distribuição de leads, que antes contava no navegador.
 export async function countConversationsAssignedTo(userId) {

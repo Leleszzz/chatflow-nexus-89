@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { useCRM } from "@/store/crm-store";
 import { TagBadge } from "@/components/shared/Badges";
 import { CustomFieldsPanel } from "@/components/shared/CustomFieldsPanel";
-import { CalendarClock, CheckCircle2, Clock3, FolderOpen, MessageCircle, Plus, Trash2, UserRound } from "lucide-react";
+import { CalendarClock, CheckCircle2, Clock3, FolderOpen, MessageCircle, Plus, Stethoscope, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
 const appointmentDateTime = (date: string, time: string) => new Date(`${date}T${time}`).getTime();
@@ -23,7 +23,7 @@ const formatAppointmentDate = (date: string) => {
 export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
   deal: Deal | null; open: boolean; onOpenChange: (v: boolean) => void; onFinish: () => void;
 }) {
-  const { updateDeal, removeDeal, tags, addTag, removeTag: removeGlobalTag, teamUsers, isAdmin, appointments, getProntuariosByDeal } = useCRM();
+  const { updateDeal, removeDeal, tags, addTag, removeTag: removeGlobalTag, teamUsers, isAdmin, appointments, getProntuariosByDeal, getConsultationsByDeal } = useCRM();
   const [newTag, setNewTag] = useState("");
   const navigate = useNavigate();
 
@@ -160,6 +160,24 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
                   {getProntuariosByDeal(deal.id).length > 0 && (
                     <span className="ml-1 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground">
                       {getProntuariosByDeal(deal.id).length}
+                    </span>
+                  )}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-2"
+                  title="Abrir consultas gravadas do cliente"
+                  onClick={() => {
+                    onOpenChange(false);
+                    navigate(`/consultas?dealId=${deal.id}`);
+                  }}
+                >
+                  <Stethoscope className="w-4 h-4" />
+                  Consultas
+                  {getConsultationsByDeal(deal.id).length > 0 && (
+                    <span className="ml-1 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground">
+                      {getConsultationsByDeal(deal.id).length}
                     </span>
                   )}
                 </Button>

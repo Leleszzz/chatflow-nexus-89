@@ -10,6 +10,8 @@ import { listAgents, getAgent, createAgent, updateAgent, deleteAgent } from "../
 import { listCustomFields, applyCustomFieldValues } from "../storage/custom-fields-repo.js";
 import { getDeal, patchDeal } from "../storage/deals-repo.js";
 import { emitDealEvent } from "../socket/events.js";
+import { callOpenAI } from "../lib/openai.js";
+import { listConsultations } from "../storage/consultations-repo.js";
 
 export const agentsRouter = Router();
 
@@ -52,37 +54,64 @@ function mediaPlaceholder(type) {
   return "";
 }
 
+// Uma consulta de 1h tem ~13k tokens de transcrição: injetar isso em toda
+// resposta encareceria cada mensagem e afogaria o prompt. Por isso o resumo
+// clínico entra por padrão, e a transcrição crua só quando não há resumo — aí
+// truncada pelo fim, que é onde ficam conduta e orientações.
+export const TRANSCRICAO_MAX_CHARS = 6000;
+
+const RESSALVA = "Use isso apenas para dar continuidade ao atendimento. Não invente informação clínica que não esteja aqui, não faça diagnóstico e não prescreva.";
+
+/**
+ * Monta o trecho de contexto a partir das consultas de um cliente. Separada do
+ * acesso ao banco para poder ser testada — é ela que decide o que o agente
+ * enxerga do prontuário.
+ */
+export function formatConsultationContext(consultas) {
+  const ultima = (consultas || [])
+    .filter(c => c?.status === "pronto" && (c.summary || c.transcriptText))
+    .sort((a, b) => new Date(b.recordedAt) - new Date(a.recordedAt))[0];
+  if (!ultima) return "";
+
+  const quando = new Date(ultima.recordedAt).toLocaleDateString("pt-BR");
+
+  if (ultima.summary) {
+    const campos = [
+      ["Queixa", ultima.summary.queixa],
+      ["Histórico", ultima.summary.historico],
+      ["Avaliação", ultima.summary.avaliacao],
+      ["Conduta", ultima.summary.conduta],
+    ].filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`);
+    if (campos.length) {
+      return `Resumo da última consulta deste cliente (${quando}), registrado no prontuário:\n${campos.join("\n")}\n\n${RESSALVA}`;
+    }
+  }
+
+  if (!ultima.transcriptText) return "";
+  // Trunca pelo começo: conduta, prescrição e orientações ficam no fim da
+  // consulta, e é isso que serve para dar continuidade ao atendimento.
+  const texto = ultima.transcriptText.length > TRANSCRICAO_MAX_CHARS
+    ? `[trecho inicial omitido]\n${ultima.transcriptText.slice(-TRANSCRICAO_MAX_CHARS)}`
+    : ultima.transcriptText;
+  return `Transcrição da última consulta deste cliente (${quando}), registrada no prontuário:\n${texto}\n\n${RESSALVA}`;
+}
+
+async function consultationContext(dealId) {
+  try {
+    return formatConsultationContext(await listConsultations({ dealId }));
+  } catch (err) {
+    // Contexto de consulta é um extra: sem ele o agente ainda responde.
+    console.warn(`[agents:respond] contexto de consulta indisponível: ${err.message}`);
+    return "";
+  }
+}
+
 function priceFor(model, usage) {
   const p = PRICING[model];
   if (!p || !usage) return 0;
   const pIn = Number(usage.prompt_tokens) || 0;
   const pOut = Number(usage.completion_tokens) || 0;
   return pIn * p.in + pOut * p.out;
-}
-
-async function callOpenAI({ apiKey, model, temperature, messages, tools, tool_choice }) {
-  const body = { model, temperature, messages };
-  if (tools) body.tools = tools;
-  if (tool_choice) body.tool_choice = tool_choice;
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    let detail = text;
-    try {
-      detail = JSON.parse(text)?.error?.message || text;
-    } catch {}
-    const err = new Error(`OpenAI ${response.status}: ${detail}`);
-    err.status = response.status;
-    throw err;
-  }
-  return response.json();
 }
 
 function pad2(n) {
@@ -323,11 +352,10 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
   // ferramenta e no prompt os que faltam — pedir o que já foi coletado irrita o
   // cliente e gasta token à toa.
   let camposPendentes = [];
-  let deal = null;
+  let deal = dealId ? await getDeal(dealId).catch(() => null) : null;
   try {
     const agente = agentId ? await getAgent(agentId) : null;
     if (agente?.extractFields?.length) {
-      deal = dealId ? await getDeal(dealId) : null;
       const definicoes = await listCustomFields();
       const byKey = new Map(definicoes.map(f => [f.key, f]));
       const jaPreenchidos = deal?.customFields || {};
@@ -342,9 +370,12 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
   // Sem deal vinculado não há onde gravar, então nem oferecemos a ferramenta.
   const podeExtrair = Boolean(deal) && camposPendentes.length > 0;
 
+  const contextoConsulta = deal ? await consultationContext(deal.id) : "";
+
   const augmentedSystem = [
     baseSystem,
     `Data/hora atual (ISO): ${effectiveNowIso}.`,
+    contextoConsulta,
     "Você tem acesso à ferramenta propose_scheduling. Chame-a APENAS quando o cliente quiser agendar, remarcar ou perguntar por horários. NÃO liste horários no texto da resposta — o painel de horários aparece para o atendente humano. Quando o cliente disser 'semana que vem', passe base_date como a próxima segunda-feira em YYYY-MM-DD.",
     podeExtrair ? collectionInstruction(camposPendentes) : "",
   ].filter(Boolean).join("\n\n");

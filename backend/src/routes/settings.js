@@ -9,6 +9,9 @@ import {
   setAgentSchedule,
   nextAssignCursor,
   rememberLastAssigned,
+  getTranscriptionSettings,
+  setTranscriptionSettings,
+  clearTranscriptionKey,
 } from "../storage/settings-repo.js";
 import { getConversation, patchConversationCrm, countConversationsAssignedTo } from "../storage/conversations-repo.js";
 import { listUsers } from "../storage/users-repo.js";
@@ -106,4 +109,37 @@ settingsRouter.put("/openai", requireAuth({ admin: true }), async (req, res) => 
 settingsRouter.delete("/openai", requireAuth({ admin: true }), async (_req, res) => {
   await clearOpenaiKey();
   res.json({ configured: false });
+});
+
+// Transcrição de consultas. Mesma divisão do bloco da OpenAI: todos leem o
+// status (a página /consultas precisa saber se dá para gravar), só admin grava,
+// e as chaves nunca saem daqui.
+function publicTranscription(t) {
+  return {
+    provider: t.provider,
+    groqConfigured: Boolean(t.groqApiKey),
+    assemblyaiConfigured: Boolean(t.assemblyaiApiKey),
+    autoSummary: t.autoSummary,
+  };
+}
+
+settingsRouter.get("/transcription", requireAuth(), async (_req, res) => {
+  res.json(publicTranscription(await getTranscriptionSettings()));
+});
+
+settingsRouter.put("/transcription", requireAuth({ admin: true }), async (req, res) => {
+  const patch = {};
+  if (typeof req.body?.provider === "string") patch.provider = req.body.provider;
+  if (typeof req.body?.groqApiKey === "string") patch.groqApiKey = req.body.groqApiKey.trim();
+  if (typeof req.body?.assemblyaiApiKey === "string") patch.assemblyaiApiKey = req.body.assemblyaiApiKey.trim();
+  if (typeof req.body?.autoSummary === "boolean") patch.autoSummary = req.body.autoSummary;
+  const updated = await setTranscriptionSettings(patch);
+  broadcast(req, "transcription:update", { transcription: publicTranscription(updated) });
+  res.json(publicTranscription(updated));
+});
+
+settingsRouter.delete("/transcription/:provider", requireAuth({ admin: true }), async (req, res) => {
+  const updated = await clearTranscriptionKey(req.params.provider);
+  broadcast(req, "transcription:update", { transcription: publicTranscription(updated) });
+  res.json(publicTranscription(updated));
 });

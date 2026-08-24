@@ -1,5 +1,6 @@
 import { listInstances } from "../storage/instances-repo.js";
 import { listUsers } from "../storage/users-repo.js";
+import { getDeal } from "../storage/deals-repo.js";
 import { permittedUserIds } from "../lib/deal-permissions.js";
 import { socketAuth, canJoinInstance } from "./auth.js";
 
@@ -33,6 +34,20 @@ export async function emitDealEvent(io, event, deal, extraDeal = null) {
     emitToUsers(io, [...ids], event, { deal });
   } catch (err) {
     console.warn(`[socket] emitDealEvent falhou: ${err.message}`);
+  }
+}
+
+// Consulta gravada segue a permissão do deal a que pertence: quem não pode ver
+// o card não pode ver a transcrição da consulta dele.
+export async function emitConsultationEvent(io, event, consultation) {
+  if (!io || !consultation) return;
+  try {
+    const deal = await getDeal(consultation.dealId);
+    if (!deal) return;
+    const users = await listUsers();
+    emitToUsers(io, permittedUserIds(deal, users), event, { consultation });
+  } catch (err) {
+    console.warn(`[socket] emitConsultationEvent falhou: ${err.message}`);
   }
 }
 
