@@ -47,6 +47,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Appointment, AppointmentType, useCRM } from "@/store/crm-store";
 import { clamp, minutesFromTime, novoHorarioAoArrastar, timeFromMinutes } from "@/lib/agenda";
 import { cn } from "@/lib/utils";
+import { isAtendente } from "@/lib/roles";
 
 type CalendarView = "day" | "week" | "month";
 
@@ -223,7 +224,7 @@ export default function Calendario() {
   const [editing, setEditing] = useState<Appointment | null>(null);
   const prefillKeyRef = useRef("");
   const selectableDeals = useMemo(() => deals.filter(canViewDeal), [canViewDeal, deals]);
-  const sellerOptions = useMemo(() => teamUsers.filter(user => user.active && user.role !== "Administrador"), [teamUsers]);
+  const sellerOptions = useMemo(() => teamUsers.filter(user => user.active && isAtendente(user.role)), [teamUsers]);
   const filterSellerOptions = useMemo(() => isAdmin ? sellerOptions : sellerOptions.filter(user => user.id === currentUser?.id), [currentUser?.id, isAdmin, sellerOptions]);
   const defaultSellerId = isAdmin ? sellerOptions[0]?.id || "" : currentUser?.id || "";
   const [form, setForm] = useState(() => emptyForm(selectableDeals[0]?.id || "", defaultSellerId));

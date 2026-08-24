@@ -2,8 +2,10 @@ import { getCol, collections } from "./mongo.js";
 
 const col = () => getCol(collections.instances);
 
-export async function listInstances() {
-  return col().find({}, { projection: { _id: 0 } }).toArray();
+// Sem argumento devolve todas (comportamento antigo); `filter` permite recortar
+// por dono ou por lista de ids sem trazer tudo para a memória.
+export async function listInstances(filter = {}) {
+  return col().find(filter, { projection: { _id: 0 } }).toArray();
 }
 
 export async function getInstance(id) {

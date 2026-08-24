@@ -1,18 +1,21 @@
 import { NavLink } from "react-router-dom";
 import { LayoutDashboard, Kanban, MessageSquare, CalendarDays, Bot, BarChart3, Settings, Sparkles, Smartphone, Megaphone, Users, UsersRound, X, FolderOpen, Stethoscope } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { PermissionKey, useCRM } from "@/store/crm-store";
+import { useCRM } from "@/store/crm-store";
+import { canRoleAccess } from "@/lib/roles";
 import { useInternalUnreadBadge } from "@/hooks/useInternalChat";
 import { Button } from "@/components/ui/button";
 
+// O que cada item exige vem de ROUTE_ROLES (@/lib/roles) — a mesma tabela do
+// guard de rota, para o menu nunca mostrar uma página que o guard vai barrar.
 const sections: {
   title: string;
-  items: { to: string; label: string; icon: typeof LayoutDashboard; end?: boolean; permission?: PermissionKey }[];
+  items: { to: string; label: string; icon: typeof LayoutDashboard; end?: boolean }[];
 }[] = [
   {
     title: "Atendimento",
     items: [
-      { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true, permission: "Ver dashboard" },
+      { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
       { to: "/conversas", label: "Conversas", icon: MessageSquare },
       { to: "/equipe", label: "Equipe", icon: UsersRound },
       { to: "/kanban", label: "Kanban", icon: Kanban },
@@ -24,27 +27,27 @@ const sections: {
   {
     title: "Automação",
     items: [
-      { to: "/agentes", label: "Agentes", icon: Bot, permission: "Criar agentes" },
+      { to: "/agentes", label: "Agentes", icon: Bot },
       { to: "/campanhas", label: "Campanhas", icon: Megaphone },
     ],
   },
   {
     title: "Gestão",
     items: [
-      { to: "/relatorios", label: "Relatórios", icon: BarChart3, permission: "Ver relatórios" },
-      { to: "/usuarios", label: "Usuários", icon: Users, permission: "Alterar configurações da empresa" },
-      { to: "/instancias", label: "Instâncias", icon: Smartphone, permission: "Alterar configurações da empresa" },
-      { to: "/configuracoes", label: "Configurações", icon: Settings, permission: "Alterar configurações da empresa" },
+      { to: "/relatorios", label: "Relatórios", icon: BarChart3 },
+      { to: "/usuarios", label: "Usuários", icon: Users },
+      { to: "/instancias", label: "Instâncias", icon: Smartphone },
+      { to: "/configuracoes", label: "Configurações", icon: Settings },
     ],
   },
 ];
 
 export function Sidebar({ mobile = false, onClose }: { mobile?: boolean; onClose?: () => void }) {
-  const { hasPermission, currentUser } = useCRM();
+  const { currentUser } = useCRM();
   // Não-lidas do chat interno, para o usuário ver que tem mensagem sem estar na página.
   const internalUnread = useInternalUnreadBadge(currentUser?.id);
   const visibleSections = sections
-    .map(section => ({ ...section, items: section.items.filter(item => !item.permission || hasPermission(item.permission)) }))
+    .map(section => ({ ...section, items: section.items.filter(item => canRoleAccess(currentUser?.role, item.to)) }))
     .filter(section => section.items.length > 0);
 
   return (

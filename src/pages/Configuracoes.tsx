@@ -23,8 +23,8 @@ import { whatsappApi, LeadListStats, QuickReply, TranscriptionStatus, Transcript
 import { TEMPLATE_VARIABLES, renderTemplate, variaveisDesconhecidas } from "@/lib/message-template";
 import { Plus, Trash2, Pencil, KeyRound, Loader2, Upload, FileText, MessageSquareText, Stethoscope } from "lucide-react";
 import { toast } from "sonner";
+import { ROLES, ROLE_OPTIONS, roleLabel, isAtendente, isSecretariaRole, type Role } from "@/lib/roles";
 
-const ROLES = ["Administrador", "Vendedora", "Financeiro", "Somente leitura"];
 
 const initialsFromName = (name: string) =>
   name.split(" ").filter(Boolean).map(part => part[0]).join("").slice(0, 2).toUpperCase();
@@ -49,7 +49,7 @@ const emptyUser: EditingUser = {
   avatar: "",
   email: "",
   phone: "",
-  role: "Vendedora",
+  role: ROLES.SECRETARIA,
   password: "",
   active: true,
   allowedTags: [],
@@ -76,7 +76,7 @@ export default function Configuracoes() {
   } = useCRM();
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<EditingUser>(emptyUser);
-  const sellerOptions = users.filter(user => user.active && user.role !== "Administrador");
+  const sellerOptions = users.filter(user => user.active && isAtendente(user.role));
   const accountPhotoInputRef = useRef<HTMLInputElement>(null);
   const userPhotoInputRef = useRef<HTMLInputElement>(null);
 
@@ -471,7 +471,7 @@ export default function Configuracoes() {
             <div><Label>Nome</Label><Input value={accountProfile.name} onChange={event => setAccountProfile({ ...accountProfile, name: event.target.value, avatar: accountProfile.avatar || initialsFromName(event.target.value) })} /></div>
             <div><Label>E-mail</Label><Input value={accountProfile.email} onChange={event => setAccountProfile({ ...accountProfile, email: event.target.value })} /></div>
             <div><Label>Telefone</Label><Input value={accountProfile.phone} onChange={event => setAccountProfile({ ...accountProfile, phone: event.target.value })} /></div>
-            <div><Label>Cargo</Label><Input value={accountProfile.role} disabled /></div>
+            <div><Label>Cargo</Label><Input value={roleLabel(accountProfile.role)} disabled /></div>
           </div>
           <Button onClick={saveAccount} className="mt-6 bg-gradient-primary">Salvar alterações</Button>
         </TabsContent>
@@ -534,7 +534,7 @@ export default function Configuracoes() {
                 <tr key={u.id} className="border-b border-border/40">
                   <td className="py-3"><div className="flex items-center gap-2"><Avatar className="w-8 h-8"><AvatarImage src={u.photoUrl} alt={u.name} /><AvatarFallback className="bg-primary-soft text-primary text-xs font-semibold">{u.avatar}</AvatarFallback></Avatar>{u.name}</div></td>
                   <td className="py-3 text-muted-foreground">{u.email}</td>
-                  <td className="py-3">{u.role}</td>
+                  <td className="py-3">{roleLabel(u.role)}</td>
                   <td className="py-3"><span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${u.active ? "bg-success-soft text-success" : "bg-muted text-muted-foreground"}`}>{u.active ? "Ativo" : "Inativo"}</span></td>
                   <td className="py-3 text-right">
                     <Button size="icon" variant="ghost" onClick={() => openEditUser(u)}><Pencil className="w-3.5 h-3.5" /></Button>
@@ -594,7 +594,7 @@ export default function Configuracoes() {
               <p className="text-xs text-muted-foreground mb-2">Deixe vazio para usar todos os usuários ativos com &quot;Recebe novos leads&quot; ligado.</p>
               <div className="grid gap-2 sm:grid-cols-2">
                 {users
-                  .filter(user => user.active && user.role !== "Administrador" && user.receivesNewLeads)
+                  .filter(user => user.active && isSecretariaRole(user.role) && user.receivesNewLeads)
                   .map(user => {
                     const checked = leadDistribution.eligibleUserIds.includes(user.id);
                     return (
@@ -611,12 +611,12 @@ export default function Configuracoes() {
                         />
                         <div>
                           <div className="text-sm font-semibold">{user.name}</div>
-                          <div className="text-xs text-muted-foreground">{user.role}</div>
+                          <div className="text-xs text-muted-foreground">{roleLabel(user.role)}</div>
                         </div>
                       </label>
                     );
                   })}
-                {users.filter(user => user.active && user.role !== "Administrador" && user.receivesNewLeads).length === 0 && (
+                {users.filter(user => user.active && isSecretariaRole(user.role) && user.receivesNewLeads).length === 0 && (
                   <div className="text-xs text-muted-foreground rounded-lg border border-dashed border-border/60 p-3 sm:col-span-2">
                     Nenhum usuário com &quot;Recebe novos leads&quot; ativo. Ajuste em Usuários para habilitar candidatos.
                   </div>
@@ -1108,10 +1108,10 @@ ANDRESSA PEREIRA SCHNEIDER|5845229758|27999060983`}
             </div>
             <div>
               <Label>Cargo</Label>
-              <Select value={editingUser.role} onValueChange={role => setEditingUser({ ...editingUser, role })}>
+              <Select value={editingUser.role} onValueChange={role => setEditingUser({ ...editingUser, role: role as Role })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {ROLES.map(role => <SelectItem key={role} value={role}>{role}</SelectItem>)}
+                  {ROLE_OPTIONS.map(opt => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

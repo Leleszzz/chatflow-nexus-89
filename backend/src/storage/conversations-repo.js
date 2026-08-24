@@ -40,8 +40,12 @@ function dropOrphanLidDuplicates(convs) {
 // `archived: true` lista só as arquivadas; o padrão esconde as arquivadas.
 // `{ archivedAt: null }` casa tanto com o campo ausente quanto com null, que é
 // o que queremos para as conversas que nunca foram arquivadas.
-export async function listConversations({ instanceId, limit, offset = 0, archived = false } = {}) {
-  const query = instanceId ? { instanceId } : {};
+// `instanceIds` (array) recorta pelas instâncias que o usuário pode ver; array
+// vazio devolve nada, que é o correto para quem não tem instância liberada.
+export async function listConversations({ instanceId, instanceIds, limit, offset = 0, archived = false } = {}) {
+  const query = {};
+  if (instanceId) query.instanceId = instanceId;
+  else if (Array.isArray(instanceIds)) query.instanceId = { $in: instanceIds };
   query.archivedAt = archived ? { $ne: null } : null;
   const all = await col().find(query, { projection: { _id: 0 } }).toArray();
   const filtered = all.filter(c =>
@@ -61,6 +65,61 @@ export async function listConversations({ instanceId, limit, offset = 0, archive
 
 export async function getConversation(id) {
   return col().findOne({ _id: id }, { projection: { _id: 0 } });
+}
+
+/**
+ * Últimos 8 dígitos — a mesma chave que o front usa em src/lib/telefone.ts.
+ * Ignora DDI, DDD e o nono dígito, que aparecem de jeitos diferentes no número
+ * que o WhatsApp devolve e no que foi digitado no cadastro do lead.
+ */
+function ultimos8(valor) {
+  const digitos = String(valor || "").replace(/\D/g, "");
+  return digitos.length >= 8 ? digitos.slice(-8) : "";
+}
+
+/** Chave do JID, sem o sufixo de servidor nem o ":device". */
+const chaveDoChat = chatId => ultimos8(baseUser(chatId));
+
+// Entre várias conversas do mesmo contato vence a de interação mais recente, e
+// um chat @s.whatsapp.net ganha de um @lid — é o par com telefone de verdade.
+function maisRelevante(convs) {
+  return convs.sort((a, b) => {
+    if (isPnChat(a) !== isPnChat(b)) return isPnChat(a) ? -1 : 1;
+    return new Date(b.lastInteraction) - new Date(a.lastInteraction);
+  })[0];
+}
+
+/**
+ * A conversa de WhatsApp de um card do CRM.
+ *
+ * Existe porque uma consulta gravada só guarda `dealId`, e mandar mensagem exige
+ * `instanceId` + `chatId`. O caminho normal é o vínculo em `crm.dealId` (o mesmo
+ * campo que `clearCrmDealLink` desfaz).
+ *
+ * O `phone` é a rede de segurança para a conversa que nunca teve o vínculo
+ * gravado — importada antes de o vínculo existir, ou criada fora do fluxo do
+ * Kanban. A tela de Conversas já casa card e conversa assim (`dealByPhone`), e
+ * sem isto a consulta de um cliente que claramente tem conversa dizia que não
+ * tinha.
+ */
+export async function findConversationByDealId(dealId, { phone } = {}) {
+  if (!dealId) return null;
+
+  const vinculadas = await col()
+    .find({ "crm.dealId": String(dealId), archivedAt: null }, { projection: { _id: 0 } })
+    .toArray();
+  if (vinculadas.length) return maisRelevante(vinculadas);
+
+  const chave = ultimos8(phone);
+  if (!chave) return null;
+
+  // O regex é só um pré-filtro barato no Mongo: o casamento de verdade é o
+  // `chaveDoChat` abaixo, que despreza o sufixo de dispositivo.
+  const candidatas = await col()
+    .find({ archivedAt: null, isGroup: false, chatId: { $regex: chave } }, { projection: { _id: 0 } })
+    .toArray();
+  const casadas = candidatas.filter(c => chaveDoChat(c.chatId) === chave || ultimos8(c.phone) === chave);
+  return casadas.length ? maisRelevante(casadas) : null;
 }
 
 export async function getConversationsByIds(ids) {

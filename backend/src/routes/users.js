@@ -8,6 +8,7 @@ import {
 } from "../storage/users-repo.js";
 import { removeUserFromThreads } from "../storage/internal-chat-repo.js";
 import { requireAuth } from "../middleware/require-auth.js";
+import { isValidRole, isAdmin, ROLES, ROLE_VALUES } from "../lib/roles.js";
 
 export const usersRouter = Router();
 
@@ -16,8 +17,13 @@ usersRouter.get("/", requireAuth(), async (_req, res) => {
   res.json(all);
 });
 
+const CARGO_INVALIDO = `role inválido: use ${ROLE_VALUES.join(", ")}`;
+
 usersRouter.post("/", requireAuth({ admin: true }), async (req, res) => {
   try {
+    if (req.body?.role !== undefined && !isValidRole(req.body.role)) {
+      return res.status(400).json({ error: CARGO_INVALIDO });
+    }
     const created = await createUser(req.body || {});
     res.status(201).json(created);
   } catch (err) {
@@ -27,7 +33,7 @@ usersRouter.post("/", requireAuth({ admin: true }), async (req, res) => {
 
 usersRouter.patch("/:id", requireAuth(), async (req, res) => {
   const targetId = req.params.id;
-  const requesterIsAdmin = req.user.role === "Administrador";
+  const requesterIsAdmin = isAdmin(req.user);
   const requesterIsSelf = req.user.id === targetId;
   if (!requesterIsAdmin && !requesterIsSelf) {
     return res.status(403).json({ error: "Sem permissão para editar este usuário" });
@@ -49,10 +55,28 @@ usersRouter.patch("/:id", requireAuth(), async (req, res) => {
   delete patch.passwordHash;
   delete patch.passwordSalt;
 
+  if (patch.role !== undefined) {
+    if (!isValidRole(patch.role)) return res.status(400).json({ error: CARGO_INVALIDO });
+    // Sem isto o único admin consegue se rebaixar e ninguém mais entra em
+    // /usuarios, /instancias ou /configuracoes para desfazer.
+    if (patch.role !== ROLES.ADMIN && (await ehUltimoAdmin(targetId))) {
+      return res.status(400).json({ error: "Não é possível remover o último administrador" });
+    }
+  }
+  if (patch.active === false && (await ehUltimoAdmin(targetId))) {
+    return res.status(400).json({ error: "Não é possível desativar o último administrador" });
+  }
+
   const updated = await updateUser(targetId, patch);
   if (!updated) return res.status(404).json({ error: "Usuário não encontrado" });
   res.json(updated);
 });
+
+async function ehUltimoAdmin(userId) {
+  const todos = await listUsers();
+  const admins = todos.filter(u => u.active && isAdmin(u));
+  return admins.length === 1 && admins[0].id === userId;
+}
 
 usersRouter.delete("/:id", requireAuth({ admin: true }), async (req, res) => {
   if (req.params.id === "admin") {
@@ -60,6 +84,9 @@ usersRouter.delete("/:id", requireAuth({ admin: true }), async (req, res) => {
   }
   const target = await getSanitizedUser(req.params.id);
   if (!target) return res.status(404).json({ error: "Usuário não encontrado" });
+  if (await ehUltimoAdmin(req.params.id)) {
+    return res.status(400).json({ error: "Não é possível excluir o último administrador" });
+  }
   await deleteUser(req.params.id);
   // Sem isso sobrariam DMs apontando para um usuário que não existe mais.
   try {

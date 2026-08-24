@@ -6,8 +6,19 @@ import {
   updateScheduled,
   deleteScheduled,
 } from "../storage/scheduled-messages-repo.js";
+import { requireAuth } from "../middleware/require-auth.js";
+import { allowedInstanceIdsForRequest, userCanUseInstance } from "../middleware/instance-access.js";
 
 export const scheduledMessagesRouter = Router();
+
+// Este router rodava sem autenticação nenhuma: qualquer um na rede agendava
+// envio de WhatsApp em qualquer instância.
+scheduledMessagesRouter.use(requireAuth());
+
+// O agendamento herda a permissão da instância em que ele vai disparar.
+async function podeMexer(req, registro) {
+  return userCanUseInstance(req.user, registro?.instanceId);
+}
 
 scheduledMessagesRouter.get("/", async (req, res) => {
   try {
@@ -17,7 +28,8 @@ scheduledMessagesRouter.get("/", async (req, res) => {
       chatId: req.query.chatId ? String(req.query.chatId) : undefined,
       status: req.query.status ? String(req.query.status) : undefined,
     });
-    res.json(items);
+    const permitidas = await allowedInstanceIdsForRequest(req);
+    res.json(permitidas === null ? items : items.filter(i => permitidas.includes(i.instanceId)));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -27,6 +39,9 @@ scheduledMessagesRouter.post("/", async (req, res) => {
   try {
     const { instanceId, chatId, conversationId, body, scheduledAt } = req.body || {};
     if (!instanceId || !chatId) return res.status(400).json({ error: "instanceId e chatId são obrigatórios" });
+    if (!(await userCanUseInstance(req.user, String(instanceId)))) {
+      return res.status(403).json({ error: "sem acesso a esta instância" });
+    }
     if (!String(body || "").trim()) return res.status(400).json({ error: "mensagem é obrigatória" });
     const when = new Date(scheduledAt);
     if (!scheduledAt || Number.isNaN(when.getTime())) return res.status(400).json({ error: "data/hora inválida" });
@@ -41,7 +56,7 @@ scheduledMessagesRouter.post("/", async (req, res) => {
       cancelIfClientReplies: Boolean(req.body?.cancelIfClientReplies),
       cancelIfAgentReplies: Boolean(req.body?.cancelIfAgentReplies),
       note: req.body?.note ? String(req.body.note) : "",
-      createdBy: req.body?.createdBy ? String(req.body.createdBy) : null,
+      createdBy: req.user.id,
     });
     res.status(201).json(record);
   } catch (err) {
@@ -53,6 +68,7 @@ scheduledMessagesRouter.patch("/:id", async (req, res) => {
   try {
     const existing = await getScheduled(req.params.id);
     if (!existing) return res.status(404).json({ error: "agendamento não encontrado" });
+    if (!(await podeMexer(req, existing))) return res.status(404).json({ error: "agendamento não encontrado" });
     if (existing.status !== "pending") return res.status(400).json({ error: "apenas agendamentos pendentes podem ser editados" });
 
     const patch = {};
@@ -81,6 +97,7 @@ scheduledMessagesRouter.delete("/:id", async (req, res) => {
   try {
     const existing = await getScheduled(req.params.id);
     if (!existing) return res.status(404).json({ error: "agendamento não encontrado" });
+    if (!(await podeMexer(req, existing))) return res.status(404).json({ error: "agendamento não encontrado" });
     if (existing.status === "pending" && req.query.purge !== "true") {
       const updated = await updateScheduled(req.params.id, { status: "cancelled", cancelledReason: "Cancelado manualmente" });
       return res.json(updated);

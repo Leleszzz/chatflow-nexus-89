@@ -16,6 +16,7 @@ import {
 import { getConversation, patchConversationCrm, countConversationsAssignedTo } from "../storage/conversations-repo.js";
 import { listUsers } from "../storage/users-repo.js";
 import { requireAuth } from "../middleware/require-auth.js";
+import { ROLES } from "../lib/roles.js";
 
 export const settingsRouter = Router();
 
@@ -54,8 +55,9 @@ settingsRouter.post("/lead-distribution/next-seller", requireAuth(), async (req,
   if (conversa.crm?.sellerId) return res.json({ assigned: null, reason: "ja-atribuida" });
 
   const users = await listUsers();
+  // Lead novo cai com a secretária: é ela quem atende, agenda e encaminha.
   const elegiveis = users.filter(u =>
-    u.active && u.receivesNewLeads && u.role !== "Administrador"
+    u.active && u.receivesNewLeads && u.role === ROLES.SECRETARIA
     && (!distribution.eligibleUserIds.length || distribution.eligibleUserIds.includes(u.id)));
   if (!elegiveis.length) return res.json({ assigned: null, reason: "sem-vendedor-elegivel" });
 

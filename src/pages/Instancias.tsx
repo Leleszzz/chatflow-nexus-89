@@ -2,12 +2,14 @@ import { useState } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useCRM } from "@/store/crm-store";
 import { useInstances } from "@/hooks/useInstances";
 import { InstanceStatus, HistorySyncMode } from "@/lib/whatsapp-api";
 import { cn } from "@/lib/utils";
 import { Cable, Check, DownloadCloud, KeyRound, MessageSquare, Pencil, Power, QrCode, RefreshCcw, Smartphone, Trash2, Wifi, WifiOff, Loader2, X } from "lucide-react";
+import { isAtendente, roleLabel } from "@/lib/roles";
 import { toast } from "sonner";
 
 const statusConfig: Record<InstanceStatus, { label: string; className: string; icon: typeof Wifi }> = {
@@ -25,8 +27,8 @@ const formatDateTime = (value: string) =>
     : "—";
 
 export default function Instancias() {
-  const { isAdmin } = useCRM();
-  const { instances, loading, error, qrByInstance, pairingCodeByInstance, createInstance, restartInstance, resyncHistory, deleteInstance, fetchQr, requestPairingCode, renameInstance } = useInstances();
+  const { isAdmin, teamUsers } = useCRM();
+  const { instances, loading, error, qrByInstance, pairingCodeByInstance, createInstance, restartInstance, resyncHistory, deleteInstance, fetchQr, requestPairingCode, renameInstance, setInstanceOwner } = useInstances();
   const [resyncingId, setResyncingId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -77,6 +79,18 @@ export default function Instancias() {
     try {
       await restartInstance(id);
       toast.success("Reconectando e verificando mensagens...");
+    } catch (err) {
+      toast.error(`Falha: ${(err as Error).message}`);
+    }
+  };
+
+  // Admin não aparece como responsável: ele não tem canal próprio, acessa todos.
+  const responsaveis = teamUsers.filter(user => user.active && isAtendente(user.role));
+
+  const handleOwnerChange = async (id: string, ownerId: string | null) => {
+    try {
+      await setInstanceOwner(id, ownerId);
+      toast.success(ownerId ? "Responsável atualizado" : "Responsável removido");
     } catch (err) {
       toast.error(`Falha: ${(err as Error).message}`);
     }
@@ -261,6 +275,30 @@ export default function Instancias() {
                     <div className="text-[10px] font-semibold uppercase text-muted-foreground">Conversas</div>
                     <div className="mt-1 text-sm font-medium">{instance.conversations || 0}</div>
                   </div>
+                </div>
+
+                {/* Quem é dono do canal. O dono enxerga e usa a instância sem
+                    precisar de liberação; os demais só entram pela lista
+                    "Instâncias permitidas" em Usuários. */}
+                <div className="mb-4">
+                  <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">Responsável</div>
+                  <Select
+                    value={instance.ownerId || "__sem__"}
+                    onValueChange={value => handleOwnerChange(instance.id, value === "__sem__" ? null : value)}
+                  >
+                    <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Sem responsável" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__sem__">Sem responsável</SelectItem>
+                      {responsaveis.map(user => (
+                        <SelectItem key={user.id} value={user.id}>{user.name} — {roleLabel(user.role)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {!instance.ownerId && (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Sem responsável, só administradores enxergam este canal.
+                    </p>
+                  )}
                 </div>
 
                 <div className="mt-5 flex gap-2">

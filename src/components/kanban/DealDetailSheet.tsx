@@ -12,6 +12,7 @@ import { TagBadge } from "@/components/shared/Badges";
 import { CustomFieldsPanel } from "@/components/shared/CustomFieldsPanel";
 import { CalendarClock, CheckCircle2, Clock3, FolderOpen, MessageCircle, Plus, Stethoscope, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
+import { isAtendente } from "@/lib/roles";
 
 const appointmentDateTime = (date: string, time: string) => new Date(`${date}T${time}`).getTime();
 
@@ -243,7 +244,7 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
                 <Select value={deal.sellerId} onValueChange={(v) => { updateDeal(deal.id, { sellerId: v }); toast.success("Responsável alterado"); }} disabled={!isAdmin}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {teamUsers.filter(user => user.active && user.role !== "Administrador").map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                    {teamUsers.filter(user => user.active && isAtendente(user.role)).map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>

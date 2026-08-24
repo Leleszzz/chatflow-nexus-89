@@ -16,6 +16,7 @@ import { useInternalMessages, useInternalThreads } from "@/hooks/useInternalChat
 import { InternalThread, whatsappApi } from "@/lib/whatsapp-api";
 import { cn } from "@/lib/utils";
 import { useCRM } from "@/store/crm-store";
+import { roleLabel } from "@/lib/roles";
 
 const initials = (name: string) => (name || "").trim().slice(0, 2).toUpperCase() || "?";
 
@@ -72,7 +73,10 @@ export default function Equipe() {
   };
 
   const subtitleFor = (thread: InternalThread) => {
-    if (thread.type !== "group") return userById.get(thread.memberIds.find(id => id !== currentUser?.id) || "")?.role || "";
+    if (thread.type !== "group") {
+      const outro = userById.get(thread.memberIds.find(id => id !== currentUser?.id) || "");
+      return outro ? roleLabel(outro.role) : "";
+    }
     return `${thread.memberIds.length} participantes`;
   };
 
@@ -356,7 +360,7 @@ export default function Equipe() {
                   </Avatar>
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">{user.name}</div>
-                    <div className="truncate text-xs text-muted-foreground">{user.role}</div>
+                    <div className="truncate text-xs text-muted-foreground">{roleLabel(user.role)}</div>
                   </div>
                 </button>
               ))}
@@ -395,7 +399,7 @@ export default function Equipe() {
                       })}
                     />
                     <span className="truncate">{user.name}</span>
-                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">{user.role}</span>
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">{roleLabel(user.role)}</span>
                   </label>
                 ))}
               </div>

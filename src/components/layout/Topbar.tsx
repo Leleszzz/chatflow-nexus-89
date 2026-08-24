@@ -2,6 +2,7 @@ import { LogOut, Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useCRM } from "@/store/crm-store";
+import { roleLabel } from "@/lib/roles";
 
 export function Topbar({ title, subtitle, onOpenMenu }: { title: string; subtitle?: string; onOpenMenu?: () => void }) {
   const { accountProfile, logout } = useCRM();
@@ -22,7 +23,7 @@ export function Topbar({ title, subtitle, onOpenMenu }: { title: string; subtitl
         <div className="flex items-center gap-3 pl-3 border-l border-border">
           <div className="hidden sm:block text-right">
             <div className="text-sm font-semibold leading-tight">{accountProfile.name}</div>
-            <div className="text-xs text-muted-foreground">{accountProfile.role}</div>
+            <div className="text-xs text-muted-foreground">{roleLabel(accountProfile.role)}</div>
           </div>
           <Avatar className="w-9 h-9 ring-2 ring-primary/20">
             <AvatarImage src={accountProfile.photoUrl} alt={accountProfile.name} />

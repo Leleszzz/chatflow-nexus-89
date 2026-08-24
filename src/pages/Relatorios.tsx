@@ -11,6 +11,7 @@ import { ClientTemperatureBadge, TagBadge } from "@/components/shared/Badges";
 import { Download, Play, FileText, Users, Bot, Flame, AlertTriangle, History, ShoppingBag, X } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
+import { isAtendente } from "@/lib/roles";
 
 const REPORTS = [
   { id: "atendimentos", name: "Atendimentos", desc: "Todos os atendimentos do período", icon: FileText },
@@ -94,7 +95,7 @@ export default function Relatorios() {
   const avgTicket = closedCount ? totalValue / closedCount : 0;
 
   const sellersList = useMemo(
-    () => teamUsers.filter(user => user.active && user.role === "Vendedora"),
+    () => teamUsers.filter(user => user.active && isAtendente(user.role)),
     [teamUsers],
   );
   const visibleSellers = isAdmin ? sellersList : sellersList.filter(sellerItem => sellerItem.id === currentUser?.id);
@@ -148,7 +149,7 @@ export default function Relatorios() {
   const buildSheet = (): { header: string[]; rows: CellValue[][] } | null => {
     if (selected === "vendedoras") {
       return {
-        header: ["Vendedora", "Atendimentos", "Vendas", "Conversão (%)", "Valor total (R$)"],
+        header: ["Responsável", "Atendimentos", "Vendas", "Conversão (%)", "Valor total (R$)"],
         rows: sellerPerformance.map(s => [s.name, s.atendimentos, s.vendas, Number(s.conversao), s.valor]),
       };
     }
@@ -166,7 +167,7 @@ export default function Relatorios() {
     if (selected === "kanban") return null;
 
     const isRefusalReport = selected === "recusas";
-    const header = ["Data", "Cliente", "Telefone", "Vendedora", "Etapa", "Temperatura", "Valor estimado (R$)", "Tags"];
+    const header = ["Data", "Cliente", "Telefone", "Responsável", "Etapa", "Temperatura", "Valor estimado (R$)", "Tags"];
     if (isRefusalReport) header.splice(5, 0, "Motivo da perda");
 
     const rows = reportRows.map(deal => {

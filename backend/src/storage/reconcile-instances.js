@@ -23,6 +23,7 @@ export async function reconcileOrphanInstances() {
       name: id,
       status: "desconectada",
       phone: "",
+      ownerId: null,
       conversations: 0,
       historySynced: true,
       createdAt: new Date().toISOString(),

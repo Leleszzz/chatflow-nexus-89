@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { minutesFromTime, novoHorarioAoArrastar, timeFromMinutes } from "@/lib/agenda";
+import {
+  computeFreeTimeButtons, conflitosNoHorario, minutesFromTime, novoHorarioAoArrastar, timeFromMinutes,
+} from "@/lib/agenda";
 import { phoneKey } from "@/lib/telefone";
+import { Appointment } from "@/lib/mock-data";
 
 // A grade do calendário: das 8h às 20h, uma hora = 64px.
 const GRADE = { hourHeight: 64, gradeInicio: 8 * 60, gradeFim: 20 * 60 };
@@ -65,5 +68,56 @@ describe("casamento de telefone entre conversa e card", () => {
     expect(phoneKey("")).toBe("");
     expect(phoneKey("abc")).toBe("");
     expect(phoneKey("1234567")).toBe("");
+  });
+});
+
+// --- horários livres e conflito (usados pela proposta de agendamento no chat e
+// pelo diálogo de retorno da tela de Consultas) ---
+
+const compromisso = (over: Partial<Appointment> = {}): Appointment => ({
+  id: "ap1", title: "Consulta", dealId: "d1", date: "2026-09-03",
+  startTime: "09:00", endTime: "10:00", sellerId: "u1", description: "",
+  type: "retorno", status: "agendado", ...over,
+});
+
+describe("horários livres do dia", () => {
+  it("tira da lista a hora ocupada pelo profissional", () => {
+    const livres = computeFreeTimeButtons("2026-09-03", [compromisso()], "u1");
+    expect(livres).not.toContain(9);
+    expect(livres).toContain(10);
+  });
+
+  it("ignora compromisso de outro profissional", () => {
+    const livres = computeFreeTimeButtons("2026-09-03", [compromisso({ sellerId: "u2" })], "u1");
+    expect(livres).toContain(9);
+  });
+
+  it("ignora compromisso cancelado e dia diferente", () => {
+    const lista = [compromisso({ status: "cancelado" }), compromisso({ id: "ap2", date: "2026-09-04" })];
+    expect(computeFreeTimeButtons("2026-09-03", lista, "u1")).toContain(9);
+  });
+
+  it("amostra no máximo cinco horários, cobrindo manhã e tarde", () => {
+    const livres = computeFreeTimeButtons("2026-09-03", [], "u1");
+    expect(livres).toHaveLength(5);
+    expect(livres[0]).toBe(9);
+    expect(livres[livres.length - 1]).toBe(17);
+  });
+});
+
+describe("detecção de conflito", () => {
+  const janela = { date: "2026-09-03", startTime: "09:30", endTime: "10:30", sellerId: "u1" };
+
+  it("acusa sobreposição parcial", () => {
+    expect(conflitosNoHorario([compromisso()], janela)).toHaveLength(1);
+  });
+
+  it("encostar no fim não é conflito", () => {
+    const colado = { ...janela, startTime: "10:00", endTime: "11:00" };
+    expect(conflitosNoHorario([compromisso()], colado)).toHaveLength(0);
+  });
+
+  it("não acusa o próprio compromisso ao remarcá-lo", () => {
+    expect(conflitosNoHorario([compromisso()], { ...janela, ignorarId: "ap1" })).toHaveLength(0);
   });
 });

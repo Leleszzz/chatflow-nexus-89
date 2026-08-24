@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { isAtendente } from "@/lib/roles";
 
 export default function Kanban() {
   const { deals, moveDeal, stages, removeStage, appointments, canViewDeal, isAdmin, teamUsers, tags, conversationPatches } = useCRM();
@@ -42,7 +43,7 @@ export default function Kanban() {
   const [search, setSearch] = useState("");
   const selectedDeal = selected ? deals.find(deal => deal.id === selected.id) || selected : null;
   const openDealId = searchParams.get("deal");
-  const sellerOptions = useMemo(() => teamUsers.filter(user => user.active && user.role !== "Administrador"), [teamUsers]);
+  const sellerOptions = useMemo(() => teamUsers.filter(user => user.active && isAtendente(user.role)), [teamUsers]);
   const activeFilters = [filterSellerIds.length > 0, filterTags.length > 0, filterWaiting !== "all", filterTemperature !== "all", Boolean(filterStart), Boolean(filterEnd)]
     .filter(Boolean).length;
   const sellerFilterLabel = filterSellerIds.length === 0

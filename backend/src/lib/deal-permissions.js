@@ -1,14 +1,13 @@
-// Espelha as regras de visibilidade de `canViewDeal`/`DEFAULT_PERMISSIONS` do
-// front (src/store/crm-store.tsx). Mantém o backend como fonte de verdade da
+// Espelha as regras de visibilidade de `canViewDeal`/`ROLE_PERMISSIONS` do
+// front (src/lib/roles.ts). Mantém o backend como fonte de verdade da
 // permissão para que um deal só chegue a quem pode vê-lo.
 
-// Papéis que enxergam TODOS os atendimentos (têm a permissão "Ver todos os
-// atendimentos" no mapa do front).
-const SEE_ALL_ROLES = new Set(["Administrador", "Gerente", "Suporte"]);
+import { seesAllDeals } from "./roles.js";
 
 export function canUserSeeDeal(user, deal) {
   if (!user || !deal) return false;
-  if (SEE_ALL_ROLES.has(user.role)) return true;
+  // Admin e secretária enxergam todos; o doutor, só o que é dele.
+  if (seesAllDeals(user)) return true;
 
   const assigned = [deal.sellerId, ...(deal.assignedSellerIds || [])].filter(Boolean);
   if (assigned.includes(user.id)) return true;

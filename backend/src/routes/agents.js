@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { getOpenaiSettings } from "../storage/settings-repo.js";
 import { requireAuth } from "../middleware/require-auth.js";
+import { userCanUseInstance } from "../middleware/instance-access.js";
 import { acquireRespondLock, releaseRespondLock, respondLockKey, isAlreadyAnswered } from "./agent-dedupe.js";
 import { connectionManager } from "../whatsapp/ConnectionManager.js";
 import { listMessages } from "../storage/messages-repo.js";
@@ -311,6 +312,9 @@ agentsRouter.post("/respond", requireAuth(), async (req, res) => {
 
   if (!instanceId || !chatId) {
     return res.status(400).json({ error: "instanceId e chatId são obrigatórios" });
+  }
+  if (!(await userCanUseInstance(req.user, String(instanceId)))) {
+    return res.status(403).json({ error: "sem acesso a esta instância" });
   }
 
   const client = connectionManager.get(instanceId);

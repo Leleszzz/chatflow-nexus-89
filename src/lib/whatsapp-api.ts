@@ -2,6 +2,7 @@ import type {
   Agent, AgentSchedule, Appointment, CrmPatch, CustomField, CustomFieldType,
   Deal, DealOutcome, LeadDistribution, Stage,
 } from "@/lib/mock-data";
+import type { Role } from "@/lib/roles";
 
 export type InstanceStatus = "ativa" | "desconectada" | "desligada" | "conectando" | "qr-pendente" | "codigo-pendente";
 
@@ -12,6 +13,8 @@ export type HistorySyncMode = "none" | "recent" | "full";
 export type WhatsAppInstance = {
   id: string;
   name: string;
+  /** Usuário responsável. `null` = sem dono: só o admin enxerga. */
+  ownerId?: string | null;
   phone: string;
   status: InstanceStatus;
   lastSync: string;
@@ -109,6 +112,20 @@ export type ConsultationSpeaker = {
   role: SpeakerRole;
 };
 
+export type ConsultationSuggestionType = "agendar_retorno" | "exames" | "confirmacao" | "orientacoes";
+export type ConsultationSuggestionStatus = "pendente" | "feito" | "dispensado";
+
+/** Ação que a IA propôs a partir da consulta. O `payload` varia por `tipo` — ver src/lib/consultation-actions.ts. */
+export type ConsultationSuggestion = {
+  id: string;
+  tipo: ConsultationSuggestionType;
+  titulo: string;
+  payload: Record<string, unknown>;
+  status: ConsultationSuggestionStatus;
+  geradoEm: string;
+  concluidoEm?: string;
+};
+
 export type ConsultationSummary = {
   queixa: string;
   historico: string;
@@ -136,6 +153,7 @@ export type Consultation = {
   transcriptText: string;
   edited: boolean;
   summary?: ConsultationSummary;
+  suggestions: ConsultationSuggestion[];
   createdBy?: string;
   createdAt: string;
   updatedAt: string;
@@ -278,7 +296,7 @@ export type UserRecord = {
   photoUrl?: string;
   email: string;
   phone?: string;
-  role: string;
+  role: Role;
   active: boolean;
   allowedTags?: string[];
   allowedConversationIds?: string[];
@@ -312,7 +330,7 @@ export const whatsappApi = {
   createInstance: (name: string, historySync: HistorySyncMode = "recent") =>
     request<WhatsAppInstance>("/api/instances", { method: "POST", body: JSON.stringify({ name, historySync }) }),
   getInstance: (id: string) => request<WhatsAppInstance>(`/api/instances/${encodeURIComponent(id)}`),
-  updateInstance: (id: string, patch: { name?: string }) =>
+  updateInstance: (id: string, patch: { name?: string; ownerId?: string | null }) =>
     request<WhatsAppInstance>(`/api/instances/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
@@ -424,6 +442,9 @@ export const whatsappApi = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
+  /** A conversa de WhatsApp vinculada a um card. 404 quando o cliente ainda não tem conversa. */
+  getConversationByDeal: (dealId: string) =>
+    request<WAConversation>(`/api/conversations/by-deal/${encodeURIComponent(dealId)}`),
   startConversation: (payload: { instanceId: string; phone: string; customer?: string }) =>
     request<WAConversation>("/api/conversations/start", {
       method: "POST",
@@ -527,6 +548,15 @@ export const whatsappApi = {
     request<Consultation>(`/api/consultations/${encodeURIComponent(id)}/retry`, { method: "POST" }),
   generateConsultationSummary: (id: string) =>
     request<Consultation>(`/api/consultations/${encodeURIComponent(id)}/summary`, { method: "POST" }),
+  updateConsultationSuggestion: (
+    consultationId: string,
+    sugestaoId: string,
+    patch: { status: ConsultationSuggestionStatus },
+  ) =>
+    request<Consultation>(
+      `/api/consultations/${encodeURIComponent(consultationId)}/suggestions/${encodeURIComponent(sugestaoId)}`,
+      { method: "PATCH", body: JSON.stringify(patch) },
+    ),
   deleteConsultation: (id: string) =>
     request<{ ok: true }>(`/api/consultations/${encodeURIComponent(id)}`, { method: "DELETE" }),
   deleteConsultationsByDeal: (dealId: string) =>

@@ -4,6 +4,7 @@ import { useWhatsAppConversations } from "@/hooks/useWhatsAppConversations";
 import { whatsappApi, WAConversation, WAMessage } from "@/lib/whatsapp-api";
 import { getSocket } from "@/lib/whatsapp-socket";
 import { Deal, Temperature } from "@/lib/mock-data";
+import { isAtendente } from "@/lib/roles";
 
 export type DashboardPeriod = "today" | "7d" | "30d" | "custom";
 
@@ -341,7 +342,7 @@ export function useDashboardMetrics(args: DashboardMetricsArgs): DashboardMetric
   }, [finished, range, allSellersSelected, sellerKey]);
 
   const ranking = useMemo<DashboardSellerRow[]>(() => {
-    const sellers = teamUsers.filter(u => u.active && u.role === "Vendedora");
+    const sellers = teamUsers.filter(u => u.active && isAtendente(u.role));
     const filtered = allSellersSelected ? sellers : sellers.filter(u => sellerIds.includes(u.id));
     return filtered.map(seller => {
       const sellerFinished = finished.filter(f => f.operatorId === seller.id && inRange(parseTs(f.finishedAt)));

@@ -14,6 +14,7 @@ import { useCRM } from "@/store/crm-store";
 import { useDashboardMetrics, formatSecondsAsMinSec } from "@/hooks/useDashboardMetrics";
 import { Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, CartesianGrid, Area, AreaChart } from "recharts";
 import { MessageCircle, Clock, AlertTriangle, ShoppingBag, TrendingUp, Flame, Thermometer, Snowflake, ChevronDown, ChevronRight } from "lucide-react";
+import { isAtendente } from "@/lib/roles";
 
 const PERIODS = [
   { id: "today", label: "Hoje", days: 1 },
@@ -67,7 +68,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
 
   const sellers = useMemo(
-    () => teamUsers.filter(u => u.active && u.role === "Vendedora"),
+    () => teamUsers.filter(u => u.active && isAtendente(u.role)),
     [teamUsers],
   );
   const SELLER_IDS = useMemo(() => sellers.map(s => s.id), [sellers]);

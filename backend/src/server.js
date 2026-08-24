@@ -31,6 +31,7 @@ import { startScheduledSender, stopScheduledSender } from "./whatsapp/scheduled-
 import { startCampaignSender, stopCampaignSender } from "./whatsapp/campaign-sender.js";
 import { connectMongo, closeMongo } from "./storage/mongo.js";
 import { reconcileOrphanInstances } from "./storage/reconcile-instances.js";
+import { migrarCargos } from "./storage/migrar-cargos.js";
 
 async function ensureDirs() {
   await fs.mkdir(config.paths.dataDir, { recursive: true });
@@ -42,6 +43,7 @@ async function main() {
   await ensureDirs();
   await connectMongo();
   await reconcileOrphanInstances();
+  await migrarCargos();
 
   const app = express();
   app.use(cors({ origin: config.corsOrigin, credentials: true }));

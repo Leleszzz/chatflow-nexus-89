@@ -4,6 +4,7 @@ import type {
   LeadDistribution, LeadDistributionStrategy, DayOfWeek, DaySchedule, AgentSchedule,
 } from "@/lib/mock-data";
 import { Deal, DealStage, Agent, AgentUsage, ALL_TAGS, STAGES, Stage, CustomField, CustomFieldValues } from "@/lib/mock-data";
+import { ROLES, seesAllDeals, roleHasPermission, isAtendente, normalizeRole, type PermissionKey, type Role } from "@/lib/roles";
 import { whatsappApi, UserRecord, ProntuarioAttachment, ProntuarioCategory, Consultation } from "@/lib/whatsapp-api";
 import { getSocket, reconnectSocket } from "@/lib/whatsapp-socket";
 
@@ -42,7 +43,7 @@ export type TeamUser = {
   photoUrl?: string;
   email: string;
   phone?: string;
-  role: string;
+  role: Role;
   password?: string;
   active: boolean;
   allowedTags?: string[];
@@ -105,7 +106,7 @@ export type AccountProfile = {
   name: string;
   email: string;
   phone: string;
-  role: string;
+  role: Role;
   avatar: string;
   photoUrl?: string;
 };
@@ -151,6 +152,9 @@ interface CRMCtx {
   currentUser: TeamUser | null;
   authReady: boolean;
   isAdmin: boolean;
+  isDoutor: boolean;
+  isSecretaria: boolean;
+  currentRole: Role | null;
   login: (identifier: string, password: string) => Promise<boolean>;
   logout: () => void;
   hasPermission: (permission: PermissionKey) => boolean;
@@ -192,29 +196,11 @@ interface CRMCtx {
 
 const Ctx = createContext<CRMCtx | null>(null);
 
-export const PERMISSIONS = [
-  "Ver dashboard",
-  "Ver todos os atendimentos",
-  "Ver apenas próprios atendimentos",
-  "Editar funil",
-  "Editar atendimentos",
-  "Finalizar venda",
-  "Criar agentes",
-  "Editar agentes",
-  "Ver relatórios",
-  "Exportar dados",
-  "Criar usuários",
-  "Alterar configurações da empresa",
-] as const;
-
-export type PermissionKey = typeof PERMISSIONS[number];
-
-const DEFAULT_PERMISSIONS: Record<string, PermissionKey[]> = {
-  Administrador: [...PERMISSIONS],
-  Gerente: PERMISSIONS.filter(permission => !["Criar usuários", "Alterar configurações da empresa", "Editar funil"].includes(permission)),
-  Vendedora: ["Ver dashboard", "Ver apenas próprios atendimentos", "Finalizar venda"],
-  Suporte: ["Ver dashboard", "Ver todos os atendimentos", "Ver relatórios"],
-};
+// As permissões e o mapa cargo → permissões moram em @/lib/roles (espelhado por
+// backend/src/lib/roles.js). Reexportados aqui porque várias telas importam
+// PermissionKey deste módulo desde antes.
+export { PERMISSIONS } from "@/lib/roles";
+export type { PermissionKey } from "@/lib/roles";
 
 // Chaves do tempo em que o estado do time morava no navegador. Removidas no
 // boot para não deixar lixo — os dados agora vêm todos do banco.
@@ -290,7 +276,7 @@ const FALLBACK_ADMIN_PROFILE: AccountProfile = {
   name: "Administrador",
   email: "admin@empresa.com",
   phone: "",
-  role: "Administrador",
+  role: ROLES.ADMIN,
   avatar: "AD",
 };
 
@@ -335,6 +321,10 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   const [teamUsers, setTeamUsers] = useState<TeamUser[]>([]);
   const [authReady, setAuthReady] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  // Lido dentro do refreshTeamUsers, que é useCallback([]) — o ref evita
+  // recriar o callback (e re-disparar os efeitos que dependem dele) a cada login.
+  const currentUserIdRef = useRef<string | null>(null);
+  useEffect(() => { currentUserIdRef.current = currentUserId; }, [currentUserId]);
   const [accountProfile, setAccountProfile] = useState<AccountProfile>(FALLBACK_ADMIN_PROFILE);
   // Derivado das conversas (conversations.crm) — ver refreshConversationPatches.
   const [conversationPatches, setConversationPatches] = useState<Record<string, CrmPatch>>({});
@@ -350,7 +340,10 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   useEffect(() => { agentScheduleRef.current = agentSchedule; }, [agentSchedule]);
 
   const currentUser = teamUsers.find(user => user.id === currentUserId && user.active) || null;
-  const isAdmin = currentUser?.role === "Administrador";
+  const currentRole: Role | null = currentUser ? normalizeRole(currentUser.role) : null;
+  const isAdmin = currentRole === ROLES.ADMIN;
+  const isDoutor = currentRole === ROLES.DOUTOR;
+  const isSecretaria = currentRole === ROLES.SECRETARIA;
 
   // Único resquício do localStorage: apagar o que ficou das versões antigas.
   useEffect(() => { clearLegacyStorage(); }, []);
@@ -358,7 +351,17 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   const refreshTeamUsers = useCallback(async () => {
     try {
       const list = await whatsappApi.listUsers();
-      setTeamUsers(list.map(toTeamUser));
+      const proximos = list.map(toTeamUser);
+      // As instâncias que o socket entrega são resolvidas no handshake. Quando o
+      // admin libera (ou tira) um canal deste usuário, sem reconectar ele
+      // continuaria com o conjunto antigo até dar F5.
+      setTeamUsers(anteriores => {
+        const meuId = currentUserIdRef.current;
+        const antes = anteriores.find(u => u.id === meuId)?.allowedInstanceIds || [];
+        const depois = proximos.find(u => u.id === meuId)?.allowedInstanceIds || [];
+        if (meuId && antes.join("|") !== depois.join("|")) reconnectSocket();
+        return proximos;
+      });
     } catch (err) {
       console.warn("[crm-store] listUsers failed", err);
     }
@@ -702,13 +705,13 @@ export function CRMProvider({ children }: { children: ReactNode }) {
 
   const hasPermission = (permission: PermissionKey) => {
     if (!currentUser) return false;
-    if (currentUser.role === "Administrador") return true;
-    return (DEFAULT_PERMISSIONS[currentUser.role] || []).includes(permission);
+    return roleHasPermission(currentUser.role, permission);
   };
 
   const canViewDeal = (deal: Deal) => {
     if (!currentUser) return false;
-    if (currentUser.role === "Administrador" || hasPermission("Ver todos os atendimentos")) return true;
+    // Espelha canUserSeeDeal do backend: admin e secretária veem todos.
+    if (seesAllDeals(currentUser.role)) return true;
 
     const assignedSellerIds = Array.from(new Set([deal.sellerId, ...(deal.assignedSellerIds || [])].filter(Boolean)));
     const hasDirectAccess = assignedSellerIds.includes(currentUser.id);
@@ -930,7 +933,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     setConversationPatch(conversationId, { schedulingProposal: null });
 
   const getEligibleSellers = (): TeamUser[] => {
-    const baseEligible = teamUsers.filter(user => user.active && user.receivesNewLeads && user.role !== "Administrador");
+    const baseEligible = teamUsers.filter(user => user.active && user.receivesNewLeads && user.role === ROLES.SECRETARIA);
     if (!leadDistribution.eligibleUserIds.length) return baseEligible;
     return baseEligible.filter(user => leadDistribution.eligibleUserIds.includes(user.id));
   };
@@ -1012,7 +1015,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <Ctx.Provider value={{ deals, setDeals, addDeal, removeDeal, moveDeal, updateDeal, stages, addStage, updateStage, moveStage, reorderStage, removeStage, appointments, addAppointment, updateAppointment, removeAppointment, finished, finishDeal, agents, addAgent, updateAgentConfig, removeAgent, customFields, refreshCustomFields, setDealCustomField, agentUsage, refreshAgentUsage, resetAgentUsage: resetAgentUsageRemote, tags, addTag, removeTag, teamUsers, setTeamUsers, accountProfile, setAccountProfile, currentUser, authReady, isAdmin, login, logout, hasPermission, canViewDeal, changePassword, refreshTeamUsers, conversationPatches, setConversationPatch, clearSchedulingProposal, leadDistribution, setLeadDistribution, agentSchedule, setAgentSchedule, getEligibleSellers, assignNextSeller, applyScheduledAgentIfActive, isAgentScheduleActive, prontuarios, refreshProntuarios, getProntuariosByDeal, linkMessageToProntuario, uploadProntuarioFile, renameProntuario, removeProntuario, consultations, refreshConsultations, getConsultationsByDeal, removeConsultation }}>
+    <Ctx.Provider value={{ deals, setDeals, addDeal, removeDeal, moveDeal, updateDeal, stages, addStage, updateStage, moveStage, reorderStage, removeStage, appointments, addAppointment, updateAppointment, removeAppointment, finished, finishDeal, agents, addAgent, updateAgentConfig, removeAgent, customFields, refreshCustomFields, setDealCustomField, agentUsage, refreshAgentUsage, resetAgentUsage: resetAgentUsageRemote, tags, addTag, removeTag, teamUsers, setTeamUsers, accountProfile, setAccountProfile, currentUser, authReady, isAdmin, isDoutor, isSecretaria, currentRole, login, logout, hasPermission, canViewDeal, changePassword, refreshTeamUsers, conversationPatches, setConversationPatch, clearSchedulingProposal, leadDistribution, setLeadDistribution, agentSchedule, setAgentSchedule, getEligibleSellers, assignNextSeller, applyScheduledAgentIfActive, isAgentScheduleActive, prontuarios, refreshProntuarios, getProntuariosByDeal, linkMessageToProntuario, uploadProntuarioFile, renameProntuario, removeProntuario, consultations, refreshConsultations, getConsultationsByDeal, removeConsultation }}>
       {children}
     </Ctx.Provider>
   );

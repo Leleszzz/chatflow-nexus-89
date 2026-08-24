@@ -132,6 +132,13 @@ export function useInstances() {
     return updated;
   }, []);
 
+  // Responsável pela instância. Sem dono, só o admin enxerga o canal.
+  const setInstanceOwner = useCallback(async (id: string, ownerId: string | null) => {
+    const updated = await whatsappApi.updateInstance(id, { ownerId });
+    setInstances(curr => curr.map(i => i.id === id ? { ...i, ...updated } : i));
+    return updated;
+  }, []);
+
   const fetchQr = useCallback(async (id: string) => {
     try {
       const { qr } = await whatsappApi.getQr(id);
@@ -149,5 +156,5 @@ export function useInstances() {
     return code;
   }, []);
 
-  return { instances, loading, error, qrByInstance, pairingCodeByInstance, refresh, createInstance, restartInstance, resyncHistory, deleteInstance, fetchQr, requestPairingCode, renameInstance };
+  return { instances, loading, error, qrByInstance, pairingCodeByInstance, refresh, createInstance, restartInstance, resyncHistory, deleteInstance, fetchQr, requestPairingCode, renameInstance, setInstanceOwner };
 }

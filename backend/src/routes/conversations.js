@@ -1,14 +1,37 @@
 import { Router } from "express";
-import { listConversations, getConversation, upsertConversation, archiveConversation, restoreConversation, patchConversationCrm } from "../storage/conversations-repo.js";
+import { listConversations, getConversation, findConversationByDealId, upsertConversation, archiveConversation, restoreConversation, patchConversationCrm } from "../storage/conversations-repo.js";
 import { listMessages } from "../storage/messages-repo.js";
 import { buildConversationId, formatPhone, isPlaceholderName } from "../whatsapp/message-mapper.js";
 import { connectionManager } from "../whatsapp/ConnectionManager.js";
 import { requireAuth } from "../middleware/require-auth.js";
+import { getDeal } from "../storage/deals-repo.js";
+import { canUserSeeDeal } from "../lib/deal-permissions.js";
+import { allowedInstanceIdsForRequest, userCanUseInstance } from "../middleware/instance-access.js";
+import { canUserSeeInstance } from "../lib/instance-permissions.js";
+import { getInstance } from "../storage/instances-repo.js";
 
 export const conversationsRouter = Router();
 
 // Todas as rotas de conversas exigem usuário autenticado.
 conversationsRouter.use(requireAuth());
+
+/**
+ * Carrega a conversa de `:id` em `req.conversation` e barra quem não tem acesso
+ * à instância dela. 404 em vez de 403: quem não pode ver a instância não deve
+ * nem descobrir que a conversa existe.
+ */
+function requireConversationAccess() {
+  return async (req, res, next) => {
+    const conv = await getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ error: "conversa não encontrada" });
+    const inst = await getInstance(conv.instanceId);
+    if (!inst || !canUserSeeInstance(req.user, inst)) {
+      return res.status(404).json({ error: "conversa não encontrada" });
+    }
+    req.conversation = conv;
+    next();
+  };
+}
 
 function chatIdFromPhone(phone) {
   const raw = String(phone || "").trim();
@@ -20,8 +43,16 @@ function chatIdFromPhone(phone) {
 
 conversationsRouter.get("/", async (req, res) => {
   const { instanceId, limit, offset, archived } = req.query;
+  // Sem recorte por instância isto devolvia as conversas de TODAS as instâncias
+  // para qualquer usuário logado.
+  const permitidas = await allowedInstanceIdsForRequest(req);
+  if (instanceId) {
+    const pedida = String(instanceId);
+    if (permitidas && !permitidas.includes(pedida)) return res.json([]);
+  }
   const items = await listConversations({
     instanceId: instanceId ? String(instanceId) : undefined,
+    instanceIds: instanceId ? undefined : permitidas ?? undefined,
     limit: limit ? Number(limit) : undefined,
     offset: offset ? Number(offset) : 0,
     archived: archived === "true" || archived === "1",
@@ -29,15 +60,24 @@ conversationsRouter.get("/", async (req, res) => {
   res.json(items);
 });
 
-conversationsRouter.get("/:id", async (req, res) => {
-  const conv = await getConversation(req.params.id);
-  if (!conv) return res.status(404).json({ error: "conversa não encontrada" });
+// A conversa de um card do CRM. Duas rotas de dois segmentos não colidem com o
+// GET /:id logo abaixo, mas esta precisa vir antes por clareza de leitura.
+conversationsRouter.get("/by-deal/:dealId", async (req, res) => {
+  const deal = await getDeal(req.params.dealId);
+  if (!deal) return res.status(404).json({ error: "cliente não encontrado" });
+  if (!canUserSeeDeal(req.user, deal)) return res.status(403).json({ error: "sem permissão para este cliente" });
+
+  const conv = await findConversationByDealId(deal.id, { phone: deal.phone });
+  if (!conv) return res.status(404).json({ error: "este cliente ainda não tem conversa no WhatsApp" });
   res.json(conv);
 });
 
-conversationsRouter.patch("/:id", async (req, res) => {
-  const conv = await getConversation(req.params.id);
-  if (!conv) return res.status(404).json({ error: "conversa não encontrada" });
+conversationsRouter.get("/:id", requireConversationAccess(), async (req, res) => {
+  res.json(req.conversation);
+});
+
+conversationsRouter.patch("/:id", requireConversationAccess(), async (req, res) => {
+  const conv = req.conversation;
   const patch = {};
   if (typeof req.body?.customer === "string") {
     const trimmed = req.body.customer.trim();
@@ -56,6 +96,9 @@ conversationsRouter.post("/start", async (req, res) => {
   const name = String(req.body?.customer || req.body?.name || "").trim();
   if (!instanceId) return res.status(400).json({ error: "instanceId é obrigatório" });
   if (!chatId) return res.status(400).json({ error: "telefone inválido" });
+  if (!(await userCanUseInstance(req.user, instanceId))) {
+    return res.status(403).json({ error: "sem acesso a esta instância" });
+  }
 
   // Resolve o JID autoritativo via WhatsApp: corrige normalizações do servidor
   // (ex.: 9º dígito no Brasil) e aprende o LID do contato, para que a resposta
@@ -109,7 +152,7 @@ conversationsRouter.post("/start", async (req, res) => {
 // Overlay de CRM da conversa: dono, etapa, tags, IA ligada, proposta de horário.
 // Antes vivia no localStorage de cada navegador, o que fazia o time ver donos e
 // etapas diferentes — e a IA responder ou não conforme a máquina aberta.
-conversationsRouter.patch("/:id/crm", async (req, res) => {
+conversationsRouter.patch("/:id/crm", requireConversationAccess(), async (req, res) => {
   const updated = await patchConversationCrm(req.params.id, req.body || {});
   if (!updated) return res.status(404).json({ error: "conversa não encontrada" });
   const io = req.app.get("io");
@@ -117,9 +160,8 @@ conversationsRouter.patch("/:id/crm", async (req, res) => {
   res.json(updated);
 });
 
-conversationsRouter.post("/:id/read", async (req, res) => {
-  const conv = await getConversation(req.params.id);
-  if (!conv) return res.status(404).json({ error: "conversa não encontrada" });
+conversationsRouter.post("/:id/read", requireConversationAccess(), async (req, res) => {
+  const conv = req.conversation;
   const unreadBefore = Number(conv.unreadCount) || 0;
   const next = await upsertConversation({ ...conv, unread: false, unreadCount: 0 });
 
@@ -171,9 +213,8 @@ conversationsRouter.post("/:id/restore", requireAuth({ admin: true }), async (re
   res.json({ conversation: restored });
 });
 
-conversationsRouter.get("/:id/messages", async (req, res) => {
-  const conv = await getConversation(req.params.id);
-  if (!conv) return res.status(404).json({ error: "conversa não encontrada" });
+conversationsRouter.get("/:id/messages", requireConversationAccess(), async (req, res) => {
+  const conv = req.conversation;
   const limit = req.query.limit ? Number(req.query.limit) : 50;
   const before = req.query.before ? Number(req.query.before) : undefined;
   const messages = await listMessages(conv.instanceId, conv.chatId, { before, limit });

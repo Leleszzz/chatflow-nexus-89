@@ -29,10 +29,11 @@ import { RecorderPanel, formatDuration } from "@/components/consultas/RecorderPa
 import { AttachToLeadDialog, AttachResult } from "@/components/consultas/AttachToLeadDialog";
 import { TranscriptView } from "@/components/consultas/TranscriptView";
 import { SpeakerMapper } from "@/components/consultas/SpeakerMapper";
+import { SuggestionsPanel } from "@/components/consultas/SuggestionsPanel";
 import { useConsultationRecorder, GravacaoPronta } from "@/hooks/useConsultationRecorder";
 import { clearSession, listSessions, loadSession, pruneOldSessions, RecordingSession } from "@/lib/recording-store";
 import { useCRM } from "@/store/crm-store";
-import { whatsappApi, Consultation, TranscriptionStatus } from "@/lib/whatsapp-api";
+import { whatsappApi, Consultation, TranscriptionStatus, WAConversation } from "@/lib/whatsapp-api";
 import { cn } from "@/lib/utils";
 
 const initials = (name: string) =>
@@ -74,7 +75,7 @@ export default function Consultas() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const {
-    deals, canViewDeal, consultations, refreshConsultations, removeConsultation, currentUser,
+    deals, canViewDeal, consultations, refreshConsultations, removeConsultation, currentUser, isDoutor,
   } = useCRM();
 
   const recorder = useConsultationRecorder();
@@ -90,6 +91,7 @@ export default function Consultas() {
 
   const [recuperavel, setRecuperavel] = useState<RecordingSession | null>(null);
   const [config, setConfig] = useState<TranscriptionStatus | null>(null);
+  const [conversa, setConversa] = useState<WAConversation | null>(null);
 
   const [editando, setEditando] = useState(false);
   const [textoEditado, setTextoEditado] = useState("");
@@ -150,6 +152,22 @@ export default function Consultas() {
   );
 
   const dealSelecionado = selecionada ? dealPorId.get(selecionada.dealId) : null;
+
+  // A conversa do cliente é o que permite mandar exames e confirmação daqui. O
+  // 404 é o caso normal de quem nunca conversou pelo WhatsApp — sem toast de
+  // erro, os botões de envio só ficam desabilitados.
+  useEffect(() => {
+    const dealId = dealSelecionado?.id;
+    if (!dealId) {
+      setConversa(null);
+      return;
+    }
+    let cancelado = false;
+    whatsappApi.getConversationByDeal(dealId)
+      .then(c => { if (!cancelado) setConversa(c); })
+      .catch(() => { if (!cancelado) setConversa(null); });
+    return () => { cancelado = true; };
+  }, [dealSelecionado?.id]);
 
   // Sai do modo edição quando o médico troca de consulta, para não salvar o
   // texto de uma na outra.
@@ -507,7 +525,7 @@ export default function Consultas() {
                       {!selecionada.edited && (
                         <SpeakerMapper
                           consultation={selecionada}
-                          nomeDoProfissional={currentUser?.name}
+                          nomeDoProfissional={isDoutor ? currentUser?.name : undefined}
                         />
                       )}
 
@@ -557,6 +575,12 @@ export default function Consultas() {
                           Gerar resumo clínico
                         </Button>
                       )}
+
+                      <SuggestionsPanel
+                        consultation={selecionada}
+                        deal={dealSelecionado}
+                        conversa={conversa}
+                      />
 
                       <div className="rounded-xl border border-border p-3">
                         <div className="mb-3 flex items-center gap-2">

@@ -11,18 +11,18 @@ import { useInstances } from "@/hooks/useInstances";
 import { whatsappApi } from "@/lib/whatsapp-api";
 import { MessageSquare, ShieldCheck, Smartphone, Tags } from "lucide-react";
 import { toast } from "sonner";
+import { ROLES, roleLabel, isAdminRole, type Role } from "@/lib/roles";
 
-const ROLE_PROFILES = [
-  { name: "Admin", role: "Administrador", desc: "Acesso total ao sistema." },
-  { name: "Vendedor", role: "Vendedora", desc: "Conversas, Kanban, Calendário e seus próprios relatórios." },
-  { name: "Financeiro", role: "Financeiro", desc: "Relatórios, cobranças e leitura de atendimentos." },
-  { name: "Somente leitura", role: "Somente leitura", desc: "Apenas visualização, sem edição." },
+const ROLE_PROFILES: { name: string; role: Role; desc: string }[] = [
+  { name: "Administrador", role: ROLES.ADMIN, desc: "Acesso total: usuários, instâncias, agentes e configurações. Não tem WhatsApp próprio." },
+  { name: "Doutor(a)", role: ROLES.DOUTOR, desc: "Consultas e prontuários, o WhatsApp dele e os canais liberados abaixo. Vê os atendimentos que são dele." },
+  { name: "Secretária", role: ROLES.SECRETARIA, desc: "Atende, agenda e encaminha pelo WhatsApp dela. Vê todos os atendimentos; não vê consultas." },
 ];
 
 export default function Usuarios() {
   const { teamUsers, refreshTeamUsers, deals, tags, hasPermission, currentUser } = useCRM();
   const { instances } = useInstances();
-  const configurableUsers = useMemo(() => teamUsers.filter(user => user.role !== "Administrador"), [teamUsers]);
+  const configurableUsers = useMemo(() => teamUsers.filter(user => !isAdminRole(user.role)), [teamUsers]);
   const [selectedUserId, setSelectedUserId] = useState(configurableUsers[0]?.id || "");
   const selectedUser = teamUsers.find(user => user.id === selectedUserId) || configurableUsers[0];
 
@@ -96,7 +96,7 @@ export default function Usuarios() {
               <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                 <th className="px-5 py-3 font-semibold">Nome</th>
                 <th className="px-5 py-3 font-semibold">E-mail</th>
-                <th className="px-5 py-3 font-semibold">Perfil</th>
+                <th className="px-5 py-3 font-semibold">Cargo</th>
                 <th className="px-5 py-3 font-semibold">Status</th>
                 <th className="px-5 py-3 font-semibold">Último acesso</th>
                 <th className="px-5 py-3 font-semibold">Conversas</th>
@@ -110,7 +110,7 @@ export default function Usuarios() {
                   <tr key={user.id} className="border-b border-border/40">
                     <td className="px-5 py-3 font-medium">{user.name}</td>
                     <td className="px-5 py-3 text-muted-foreground">{user.email}</td>
-                    <td className="px-5 py-3">{user.role}</td>
+                    <td className="px-5 py-3">{roleLabel(user.role)}</td>
                     <td className="px-5 py-3">
                       <div className="flex flex-wrap gap-1">
                         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${user.active ? "bg-success-soft text-success" : "bg-muted text-muted-foreground"}`}>
@@ -225,7 +225,9 @@ export default function Usuarios() {
               <h2 className="font-display text-base font-bold">Instâncias permitidas</h2>
             </div>
             <div className="mb-3 text-xs text-muted-foreground">
-              Controle quais canais o vendedor pode usar quando a integração estiver conectada.
+              Canais de WhatsApp que este usuário pode ler e usar para enviar, <strong>além do canal em que
+              ele já é o responsável</strong> (definido em Instâncias). É aqui que o doutor ganha acesso ao
+              WhatsApp da secretária.
             </div>
             <div className="space-y-2">
               {instances.map(instance => (

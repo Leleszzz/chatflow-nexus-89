@@ -3,6 +3,7 @@ import { nanoid } from "nanoid";
 import { config } from "../config.js";
 import { getCol, collections } from "./mongo.js";
 import { hashPassword } from "../lib/password.js";
+import { normalizeRole, ROLES } from "../lib/roles.js";
 
 const col = () => getCol(collections.users);
 const SEED_FILE = config.paths.usersSeedFile;
@@ -34,7 +35,8 @@ async function ensureSeed() {
 function sanitize(user) {
   if (!user) return user;
   const { passwordHash, passwordSalt, password, _id, ...rest } = user;
-  return rest;
+  // Defesa contra doc legado que tenha escapado da migração de cargos.
+  return { ...rest, role: normalizeRole(rest.role) };
 }
 
 export async function listUsers() {
@@ -77,20 +79,21 @@ async function withPasswordPatch(patch) {
 export async function createUser(input) {
   await ensureSeed();
   const id = input.id || `u${nanoid(8)}`;
+  const role = normalizeRole(input.role);
   const base = {
     id,
     name: input.name || "",
     username: input.username || (input.email ? input.email.split("@")[0] : id),
     email: input.email || "",
     phone: input.phone || "",
-    role: input.role || "Vendedora",
+    role,
     avatar: input.avatar || "",
     photoUrl: input.photoUrl,
     active: input.active !== false,
     allowedTags: input.allowedTags || [],
     allowedConversationIds: input.allowedConversationIds || [],
     allowedInstanceIds: input.allowedInstanceIds || [],
-    receivesNewLeads: input.receivesNewLeads ?? (input.role === "Vendedora"),
+    receivesNewLeads: input.receivesNewLeads ?? (role === ROLES.SECRETARIA),
   };
   const withCreds = { ...base, ...(await withPasswordPatch({ password: input.password })) };
 

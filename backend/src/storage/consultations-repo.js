@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 import { getCol, collections } from "./mongo.js";
 import { renderTranscript, buildSpeakers } from "../lib/transcription/render.js";
+import { normalizeSuggestions } from "../lib/transcription/suggestions.js";
 
 const col = () => getCol(collections.consultations);
 const PROJ = { projection: { _id: 0 } };
@@ -67,6 +68,7 @@ function normalize(record) {
     transcriptText: String(record.transcriptText || ""),
     edited: Boolean(record.edited),
     summary: normalizeSummary(record.summary),
+    suggestions: normalizeSuggestions(record.suggestions),
     createdBy: record.createdBy ? String(record.createdBy) : undefined,
     createdAt: record.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),

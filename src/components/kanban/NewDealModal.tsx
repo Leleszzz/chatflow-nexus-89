@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Deal, Temperature } from "@/lib/mock-data";
 import { useCRM } from "@/store/crm-store";
 import { toast } from "sonner";
+import { isAtendente } from "@/lib/roles";
 
 const initialForm = {
   customer: "",
@@ -21,7 +22,7 @@ const initialForm = {
 
 export function NewDealModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { addDeal, teamUsers, currentUser, isAdmin } = useCRM();
-  const defaultSellerId = isAdmin ? teamUsers.find(user => user.active && user.role !== "Administrador")?.id || initialForm.sellerId : currentUser?.id || initialForm.sellerId;
+  const defaultSellerId = isAdmin ? teamUsers.find(user => user.active && isAtendente(user.role))?.id || initialForm.sellerId : currentUser?.id || initialForm.sellerId;
   const [form, setForm] = useState(() => ({ ...initialForm, sellerId: defaultSellerId }));
 
   const reset = () => setForm({ ...initialForm, sellerId: defaultSellerId });
@@ -80,7 +81,7 @@ export function NewDealModal({ open, onOpenChange }: { open: boolean; onOpenChan
               <Select value={isAdmin ? form.sellerId : currentUser?.id || form.sellerId} onValueChange={(sellerId) => setForm({ ...form, sellerId })} disabled={!isAdmin}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {teamUsers.filter(user => user.active && user.role !== "Administrador").map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                  {teamUsers.filter(user => user.active && isAtendente(user.role)).map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

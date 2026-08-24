@@ -20,6 +20,7 @@ import { emitConsultationEvent } from "../socket/events.js";
 import { getTranscriptionSettings, getOpenaiSettings } from "../storage/settings-repo.js";
 import { transcribe } from "../lib/transcription/index.js";
 import { summarizeConsultation } from "../lib/transcription/summary.js";
+import { mergeSuggestions, SUGGESTION_STATUS } from "../lib/transcription/suggestions.js";
 import { renderTranscript, buildSpeakers } from "../lib/transcription/render.js";
 
 // 200 MB cobre uma consulta de várias horas gravada em WebM pelo navegador.
@@ -51,9 +52,10 @@ async function assertAcesso(req, res, consultation) {
  */
 async function processConsultation(io, consultationId, sourcePath) {
   try {
-    const [transcription, openai] = await Promise.all([
+    const [transcription, openai, anterior] = await Promise.all([
       getTranscriptionSettings(),
       getOpenaiSettings(),
+      getConsultation(consultationId),
     ]);
 
     const result = await transcribe({
@@ -66,18 +68,7 @@ async function processConsultation(io, consultationId, sourcePath) {
     const speakers = buildSpeakers(result.segments);
     const transcriptText = renderTranscript(result.segments, speakers);
 
-    let summary;
-    if (transcription.autoSummary && openai.apiKey) {
-      try {
-        summary = await summarizeConsultation({ transcriptText, apiKey: openai.apiKey });
-      } catch (err) {
-        // Resumo é acessório: a transcrição é o produto, e perdê-la porque o
-        // resumo falhou seria um mau negócio. Fica sem resumo e segue.
-        console.warn(`[consultations] resumo falhou (${consultationId}): ${err.message}`);
-      }
-    }
-
-    const updated = await patchConsultation(consultationId, {
+    const patch = {
       status: "pronto",
       error: "",
       provider: result.provider,
@@ -86,8 +77,27 @@ async function processConsultation(io, consultationId, sourcePath) {
       segments: result.segments,
       speakers,
       transcriptText,
-      summary,
-    });
+    };
+
+    if (transcription.autoSummary && openai.apiKey) {
+      try {
+        const gerado = await summarizeConsultation({
+          transcriptText,
+          recordedAt: anterior?.recordedAt,
+          apiKey: openai.apiKey,
+        });
+        patch.summary = gerado.summary;
+        // Reprocessar não pode desfazer o que o médico já executou: as sugestões
+        // concluídas atravessam o retry.
+        patch.suggestions = mergeSuggestions(gerado.suggestions, anterior?.suggestions);
+      } catch (err) {
+        // Resumo é acessório: a transcrição é o produto, e perdê-la porque o
+        // resumo falhou seria um mau negócio. Fica sem resumo e segue.
+        console.warn(`[consultations] resumo falhou (${consultationId}): ${err.message}`);
+      }
+    }
+
+    const updated = await patchConsultation(consultationId, patch);
     emitConsultationEvent(io, "consultation:update", updated);
   } catch (err) {
     console.error(`[consultations] falha ao processar ${consultationId}:`, err.message);
@@ -251,12 +261,49 @@ consultationsRouter.post("/:id/summary", requireAuth(), async (req, res) => {
     const { apiKey } = await getOpenaiSettings();
     if (!apiKey) return res.status(400).json({ error: "OpenAI key não configurada" });
 
-    const summary = await summarizeConsultation({ transcriptText: atual.transcriptText, apiKey });
-    const updated = await patchConsultation(req.params.id, { summary });
+    const { summary, suggestions } = await summarizeConsultation({
+      transcriptText: atual.transcriptText,
+      recordedAt: atual.recordedAt,
+      apiKey,
+    });
+    const updated = await patchConsultation(req.params.id, {
+      summary,
+      suggestions: mergeSuggestions(suggestions, atual.suggestions),
+    });
     emitConsultationEvent(req.app.get("io"), "consultation:update", updated);
     res.json(updated);
   } catch (err) {
     res.status(502).json({ error: err.message });
+  }
+});
+
+// Marca uma sugestão como executada ou dispensada. Endpoint próprio, e não o
+// array inteiro no PATCH /:id, para que dois cliques seguidos (ou duas abas) não
+// se sobrescrevam.
+consultationsRouter.patch("/:id/suggestions/:sugestaoId", requireAuth(), async (req, res) => {
+  try {
+    const atual = await getConsultation(req.params.id);
+    if (!(await assertAcesso(req, res, atual))) return;
+
+    const status = String(req.body?.status || "");
+    if (!SUGGESTION_STATUS.has(status)) {
+      return res.status(400).json({ error: "status inválido (use pendente, feito ou dispensado)" });
+    }
+
+    const suggestions = (atual.suggestions || []).map(s => (
+      s.id === req.params.sugestaoId
+        ? { ...s, status, concluidoEm: status === "pendente" ? undefined : new Date().toISOString() }
+        : s
+    ));
+    if (!suggestions.some(s => s.id === req.params.sugestaoId)) {
+      return res.status(404).json({ error: "sugestão não encontrada" });
+    }
+
+    const updated = await patchConsultation(req.params.id, { suggestions });
+    emitConsultationEvent(req.app.get("io"), "consultation:update", updated);
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

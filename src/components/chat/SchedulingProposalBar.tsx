@@ -2,20 +2,15 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Appointment, SchedulingProposal } from "@/store/crm-store";
 import { CalendarClock, ChevronLeft, Send, X } from "lucide-react";
+import { computeFreeTimeButtons } from "@/lib/agenda";
 import { cn } from "@/lib/utils";
 
 const WEEKDAY_SHORT = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
-const HOUR_SLOTS = [9, 10, 11, 12, 13, 14, 15, 16, 17];
 
 const parseDateKey = (key: string) => {
   const m = key.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return null;
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-};
-
-const hhmmToMinutes = (hhmm: string) => {
-  const [h, m] = hhmm.split(":").map(Number);
-  return h * 60 + (m || 0);
 };
 
 const formatDayLabel = (key: string) => {
@@ -29,33 +24,6 @@ const formatWeekdayLabel = (key: string) => {
   if (!d) return "";
   return WEEKDAY_SHORT[d.getDay()];
 };
-
-export function computeFreeTimeButtons(
-  dateKey: string,
-  appointments: Appointment[],
-  sellerId: string | undefined,
-): number[] {
-  const conflicting = appointments.filter(a => {
-    if (a.date !== dateKey) return false;
-    if (a.status === "cancelado") return false;
-    if (sellerId && a.sellerId && a.sellerId !== sellerId) return false;
-    return true;
-  });
-  const free = HOUR_SLOTS.filter(h => {
-    const slotStart = h * 60;
-    const slotEnd = slotStart + 60;
-    return !conflicting.some(c =>
-      hhmmToMinutes(c.startTime) < slotEnd && hhmmToMinutes(c.endTime) > slotStart,
-    );
-  });
-  if (free.length <= 5) return free;
-  const out: number[] = [];
-  for (let i = 0; i < 5; i++) {
-    const idx = Math.round((i * (free.length - 1)) / 4);
-    if (!out.includes(free[idx])) out.push(free[idx]);
-  }
-  return out;
-}
 
 interface Props {
   proposal: SchedulingProposal;

@@ -8,6 +8,7 @@ import { convertToOggOpus, isOggOpus } from "../whatsapp/audio-convert.js";
 import { cancelDueToAgentReply } from "../storage/scheduled-messages-repo.js";
 import { emitToInstance } from "../socket/events.js";
 import { requireAuth } from "../middleware/require-auth.js";
+import { requireInstanceAccess } from "../middleware/instance-access.js";
 
 const upload = multer({ dest: "data/uploads", limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -20,8 +21,10 @@ function typeForOutgoing(kind) {
 
 export const sendRouter = Router();
 
-// Auth ANTES do multer: requisição não autenticada não grava arquivo em disco.
-sendRouter.post("/:id/send", requireAuth(), upload.single("file"), async (req, res) => {
+// Auth e permissão da instância ANTES do multer: requisição sem acesso não
+// grava arquivo em disco. É este gate que deixa o doutor enviar pela instância
+// da secretária (liberada em /usuarios) e impede o caminho inverso.
+sendRouter.post("/:id/send", requireAuth(), requireInstanceAccess(), upload.single("file"), async (req, res) => {
   const instanceId = req.params.id;
   const client = connectionManager.get(instanceId);
   if (!client) return res.status(404).json({ error: "instância não conectada" });

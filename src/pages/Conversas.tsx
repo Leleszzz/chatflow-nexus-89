@@ -28,6 +28,7 @@ import { AudioMessage } from "@/components/chat/AudioMessage";
 import { ImageViewer } from "@/components/chat/ImageViewer";
 import { RecordingWaveform } from "@/components/chat/RecordingWaveform";
 import { SchedulingProposalBar } from "@/components/chat/SchedulingProposalBar";
+import { isAtendente } from "@/lib/roles";
 
 type Conversation = {
   id: string;
@@ -294,7 +295,7 @@ export default function Conversas() {
     return new Set(Array.from(counts.entries()).filter(([, c]) => c > 1).map(([k]) => k));
   }, [waConversations]);
 
-  const sellerOptions = useMemo(() => teamUsers.filter(user => user.active && user.role !== "Administrador"), [teamUsers]);
+  const sellerOptions = useMemo(() => teamUsers.filter(user => user.active && isAtendente(user.role)), [teamUsers]);
   const activeAgents = useMemo(() => agents.filter(agent => agent.active), [agents]);
 
   // Índice dos cards por telefone. Rede de segurança para a conversa que ainda
