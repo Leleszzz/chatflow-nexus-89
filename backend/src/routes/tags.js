@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router } from "../lib/safe-router.js";
 import { listTags, createTag, deleteTag } from "../storage/tags-repo.js";
 import { requireAuth } from "../middleware/require-auth.js";
 

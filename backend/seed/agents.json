@@ -1,0 +1,62 @@
+[
+  {
+    "id": "a1",
+    "name": "Triagem Inicial",
+    "description": "Recebe e qualifica todos os leads novos",
+    "prompt": "Você é um SDR amigável. Cumprimente, descubra a necessidade do cliente e colete nome, produto de interesse e prazo.",
+    "model": "econom",
+    "temperature": 0.6,
+    "active": true,
+    "conversations": 412,
+    "updatedAt": "2026-04-28T13:40:00.000Z",
+    "channel": "WhatsApp Principal",
+    "triggerTags": ["novo", "instagram", "whatsapp"],
+    "blockWords": ["reclamação"],
+    "handoffMessage": "Vou te transferir para um especialista, um momento."
+  },
+  {
+    "id": "a2",
+    "name": "Vendedor Consultivo",
+    "description": "Conduz negociações e envia propostas",
+    "prompt": "Você é vendedor consultivo. Faça perguntas abertas, identifique dores e apresente soluções com valor.",
+    "model": "premium",
+    "temperature": 0.7,
+    "active": true,
+    "conversations": 187,
+    "updatedAt": "2026-04-27T20:00:00.000Z",
+    "channel": "WhatsApp Principal",
+    "triggerTags": ["proposta", "negociacao"],
+    "blockWords": [],
+    "handoffMessage": "Vou chamar um humano para finalizar."
+  },
+  {
+    "id": "a3",
+    "name": "Pós-venda",
+    "description": "Acompanha entregas e coleta feedback",
+    "prompt": "Você cuida do pós-venda. Confirme satisfação, peça avaliação e ofereça suporte.",
+    "model": "balanced",
+    "temperature": 0.5,
+    "active": false,
+    "conversations": 96,
+    "updatedAt": "2026-04-25T15:00:00.000Z",
+    "channel": "WhatsApp Suporte",
+    "triggerTags": ["pos-venda"],
+    "blockWords": [],
+    "handoffMessage": "Vou te direcionar ao suporte."
+  },
+  {
+    "id": "a4",
+    "name": "Recuperação de Orçamentos",
+    "description": "Reativa contatos que ficaram sem resposta",
+    "prompt": "Você recupera oportunidades paradas. Seja objetivo, relembre o contexto e ofereça um próximo passo claro.",
+    "model": "balanced",
+    "temperature": 0.4,
+    "active": true,
+    "conversations": 143,
+    "updatedAt": "2026-04-28T09:15:00.000Z",
+    "channel": "WhatsApp Principal",
+    "triggerTags": ["aguardando-resposta", "sem resposta"],
+    "blockWords": ["cancelar", "não quero"],
+    "handoffMessage": "Vou pedir para uma pessoa do time continuar com você."
+  }
+]

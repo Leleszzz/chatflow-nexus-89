@@ -18,6 +18,7 @@ import { upsertConversation, getConversation, getConversationsByIds, countConver
 import { cancelDueToClientReply } from "../../storage/scheduled-messages-repo.js";
 import { markRepliedByConversation } from "../../storage/campaigns-repo.js";
 import { emitToInstance } from "../../socket/events.js";
+import { aoReceberMensagem } from "../agent-auto-reply.js";
 
 // Idade máxima (em ms) para baixar mídia do HISTÓRICO. Mídia mais antiga que isso
 // raramente é descriptografável e não é urgente — evita enfileirar milhares de
@@ -178,6 +179,12 @@ export class MessagePipeline {
     if (!persisted.avatarUrl) this.mediaQueue.enqueue({ kind: "avatar", jid, conversationId: persisted.id });
 
     if (!stored.fromMe) {
+      // Gatilho do agente de IA. Antes isto morava no NAVEGADOR de cada
+      // atendente (useAgentAutoReply), entao o agente parava de responder
+      // quando todo mundo fechava o CRM. Nao bloqueia o pipeline: agenda e
+      // segue. Falha do agente nunca pode impedir a mensagem de ser salva.
+      aoReceberMensagem({ io: this.io, conversation: persisted, message: stored });
+
       try {
         const cancelled = await cancelDueToClientReply(this.instanceId, jid);
         for (const sch of cancelled) this._emit("scheduled:update", { scheduled: sch });

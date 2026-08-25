@@ -17,50 +17,138 @@ function baseUser(chatId) {
   return String(chatId || "").split("@")[0].split(":")[0];
 }
 
-// Esconde apenas conversas @lid que já têm um par @s.whatsapp.net REAL na mesma
-// instância (mesmo "user base"), ou seja, o lid comprovadamente resolve para um
-// PN conhecido. Nunca descarta um @lid que seja o único registro de um contato
-// para sua instância. Rede de segurança de leitura — a mesclagem autoritativa é
-// feita no pipeline.
-function dropOrphanLidDuplicates(convs) {
-  const pnUsersByInstance = new Map(); // instanceId -> Set(baseUser)
-  for (const c of convs) {
-    if (!isPnChat(c)) continue;
-    const set = pnUsersByInstance.get(c.instanceId) || new Set();
-    set.add(baseUser(c.chatId));
-    pnUsersByInstance.set(c.instanceId, set);
-  }
-  return convs.filter(c => {
-    if (!isLidChat(c)) return true;
-    const peers = pnUsersByInstance.get(c.instanceId);
-    return !(peers && peers.has(baseUser(c.chatId)));
-  });
+/**
+ * Conversas @lid que já têm um par @s.whatsapp.net REAL na mesma instância —
+ * ou seja, o LID comprovadamente resolve para um número conhecido. Rede de
+ * segurança de leitura; a mesclagem autoritativa é feita no pipeline.
+ *
+ * Antes isto rodava sobre a coleção INTEIRA carregada em memória. Agora só a
+ * página que vai ser devolvida é examinada: no máximo `limit` conversas @lid
+ * geram UMA consulta extra, em vez de materializar tudo para descobrir o mesmo.
+ */
+async function idsLidComParPn(pagina) {
+  const lids = pagina.filter(isLidChat);
+  if (!lids.length) return new Set();
+
+  // Um OR de (instância, número base) por @lid da página. Casa com o índice
+  // { instanceId, ... } e devolve só o chatId.
+  const condicoes = lids.map(c => ({
+    instanceId: c.instanceId,
+    chatId: { $in: [`${baseUser(c.chatId)}@s.whatsapp.net`] },
+  }));
+  const pares = await col()
+    .find({ $or: condicoes }, { projection: { _id: 0, instanceId: 1, chatId: 1 } })
+    .toArray();
+
+  const conhecidos = new Set(pares.map(p => `${p.instanceId}|${baseUser(p.chatId)}`));
+  return new Set(
+    lids.filter(c => conhecidos.has(`${c.instanceId}|${baseUser(c.chatId)}`)).map(c => c.id),
+  );
 }
 
-// `archived: true` lista só as arquivadas; o padrão esconde as arquivadas.
-// `{ archivedAt: null }` casa tanto com o campo ausente quanto com null, que é
-// o que queremos para as conversas que nunca foram arquivadas.
-// `instanceIds` (array) recorta pelas instâncias que o usuário pode ver; array
-// vazio devolve nada, que é o correto para quem não tem instância liberada.
-export async function listConversations({ instanceId, instanceIds, limit, offset = 0, archived = false } = {}) {
-  const query = {};
+// Teto de segurança. Sem `limit`, a rota devolvia TODAS as conversas: com 20 mil
+// no banco isso eram centenas de MB materializados no Node a cada abertura da
+// tela, por usuário. O teto é generoso para não mudar o comportamento de quem
+// tem pouca conversa, mas impede o caso patológico.
+export const LIMITE_PADRAO_CONVERSAS = 500;
+export const LIMITE_MAXIMO_CONVERSAS = 2000;
+
+/** Normaliza `limit` vindo da query: descarta NaN, negativo e valor absurdo. */
+export function clampLimiteConversas(bruto) {
+  const n = Number(bruto);
+  if (!Number.isFinite(n) || n <= 0) return LIMITE_PADRAO_CONVERSAS;
+  return Math.min(Math.floor(n), LIMITE_MAXIMO_CONVERSAS);
+}
+
+// Grupos/broadcast/newsletter nunca aparecem na caixa de entrada. `isGroup` é o
+// campo indexável; os sufixos são o resíduo defensivo para documentos antigos
+// gravados antes do campo existir.
+const SUFIXOS_IGNORADOS = /@(g\.us|broadcast|newsletter)$/;
+
+/**
+ * `archived: true` lista só as arquivadas; o padrão esconde as arquivadas.
+ * `{ archivedAt: null }` casa tanto com o campo ausente quanto com null.
+ * `instanceIds` (array) recorta pelas instâncias que o usuário pode ver; array
+ * vazio devolve nada, que é o correto para quem não tem instância liberada.
+ *
+ * Filtro, ordenação e paginação acontecem NO MONGO. Antes era
+ * `.find(query).toArray()` seguido de filter/sort/slice em JavaScript: o índice
+ * { instanceId, lastInteraction } criado no boot nunca era usado, porque a
+ * ordenação real acontecia fora do banco.
+ */
+// Metacaracteres de regex, listados como caracteres em vez de escritos dentro
+// de um literal — assim nao ha backslash para escapar errado.
+const META_REGEX = new Set([
+  ".", "*", "+", "?", "^", "$", "{", "}", "(", ")", "|", "[", "]", String.fromCharCode(92),
+]);
+
+/**
+ * Transforma o termo digitado em texto LITERAL para o regex.
+ *
+ * Sem isto, um cliente chamado "Ana (mae)" quebraria a consulta, e um termo
+ * como "(a+)+$" viraria um regex catastrofico que trava o banco (ReDoS).
+ */
+export function escaparRegex(texto) {
+  let saida = "";
+  for (const ch of String(texto)) saida += META_REGEX.has(ch) ? String.fromCharCode(92) + ch : ch;
+  return saida;
+}
+
+export async function listConversations({ instanceId, instanceIds, limit, offset = 0, archived = false, busca } = {}) {
+  const query = {
+    isGroup: false,
+    chatId: { $not: SUFIXOS_IGNORADOS },
+    archivedAt: archived ? { $ne: null } : null,
+  };
   if (instanceId) query.instanceId = instanceId;
   else if (Array.isArray(instanceIds)) query.instanceId = { $in: instanceIds };
-  query.archivedAt = archived ? { $ne: null } : null;
-  const all = await col().find(query, { projection: { _id: 0 } }).toArray();
-  const filtered = all.filter(c =>
-    c &&
-    typeof c.id === "string" &&
-    typeof c.chatId === "string" &&
-    c.isGroup === false &&
-    !c.chatId.endsWith("@g.us") &&
-    !c.chatId.endsWith("@broadcast") &&
-    !c.chatId.endsWith("@newsletter")
-  );
-  const deduped = dropOrphanLidDuplicates(filtered);
-  const sorted = deduped.sort((a, b) => new Date(b.lastInteraction) - new Date(a.lastInteraction));
-  if (limit == null) return sorted;
-  return sorted.slice(offset, offset + limit);
+
+  // Busca NO SERVIDOR. Antes o front carregava todas as conversas e filtrava em
+  // memória — o que funcionava, mas só porque tudo estava carregado. Com a
+  // listagem paginada, filtrar no cliente encontraria apenas o que coube na
+  // primeira página, e o atendente concluiria que o contato "não existe".
+  const termo = String(busca || "").trim();
+  if (termo) {
+    const alvo = new RegExp(escaparRegex(termo), "i");
+    const somenteDigitos = termo.replace(/\D/g, "");
+    query.$or = [
+      { customer: alvo },
+      { whatsappName: alvo },
+      { phone: alvo },
+      { lastMessage: alvo },
+      ...(somenteDigitos.length >= 4 ? [{ chatId: new RegExp(escaparRegex(somenteDigitos)) }] : []),
+    ];
+  }
+
+  const teto = clampLimiteConversas(limit);
+  const inicio = Number.isFinite(Number(offset)) && Number(offset) > 0 ? Math.floor(Number(offset)) : 0;
+
+  // Busca um pouco além do teto para conseguir repor o que a deduplicação de
+  // @lid remover, sem precisar de uma segunda rodada.
+  const folga = Math.min(teto + 50, LIMITE_MAXIMO_CONVERSAS + 50);
+  const pagina = await col()
+    .find(query, { projection: { _id: 0 } })
+    .sort({ lastInteraction: -1 })
+    .skip(inicio)
+    .limit(folga)
+    .toArray();
+
+  const descartar = await idsLidComParPn(pagina);
+  return pagina.filter(c => c && typeof c.id === "string" && !descartar.has(c.id)).slice(0, teto);
+}
+
+/**
+ * Só o overlay de CRM de cada conversa (dono, etapa, tags, IA vinculada).
+ *
+ * Existe para o store do front parar de baixar a LISTA INTEIRA de conversas só
+ * para reindexar esse pedacinho — o que, além de desperdício, passou a perder
+ * dados quando a listagem virou paginada. Aqui a projeção é mínima e o filtro
+ * descarta quem não tem overlay nenhum.
+ */
+export async function listCrmOverlays(instanceIds) {
+  const query = { crm: { $exists: true, $ne: null } };
+  if (Array.isArray(instanceIds)) query.instanceId = { $in: instanceIds };
+  return col().find(query, { projection: { _id: 0, id: 1, crm: 1 } }).toArray();
 }
 
 export async function getConversation(id) {
@@ -113,10 +201,15 @@ export async function findConversationByDealId(dealId, { phone } = {}) {
   const chave = ultimos8(phone);
   if (!chave) return null;
 
-  // O regex é só um pré-filtro barato no Mongo: o casamento de verdade é o
-  // `chaveDoChat` abaixo, que despreza o sufixo de dispositivo.
+  // Regex ANCORADO no fim do número, e não solto no meio da string: sem a
+  // âncora, o Mongo varria a coleção inteira comparando substring. `chave` são
+  // 8 dígitos, então escapar não é necessário — mas a âncora é.
   const candidatas = await col()
-    .find({ archivedAt: null, isGroup: false, chatId: { $regex: chave } }, { projection: { _id: 0 } })
+    .find(
+      { archivedAt: null, isGroup: false, chatId: { $regex: `${chave}(:[0-9]+)?@` } },
+      { projection: { _id: 0 } },
+    )
+    .limit(200)
     .toArray();
   const casadas = candidatas.filter(c => chaveDoChat(c.chatId) === chave || ultimos8(c.phone) === chave);
   return casadas.length ? maisRelevante(casadas) : null;

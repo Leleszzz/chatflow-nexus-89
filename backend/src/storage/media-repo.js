@@ -1,29 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import mime from "mime-types";
 import { nanoid } from "nanoid";
 import { config } from "../config.js";
+import { cleanMime, safeExtension } from "../lib/media-safety.js";
 
-function cleanMime(mimeType) {
-  return String(mimeType || "").split(";")[0].trim().toLowerCase();
-}
+// Teto do que aceitamos gravar. O buffer de mídia recebida vem de um contato
+// qualquer do WhatsApp: sem limite, um vídeo grande o bastante derruba o
+// processo por falta de memória antes mesmo de chegar ao disco.
+export const MAX_MEDIA_BYTES = Number(process.env.MAX_MEDIA_MB || 100) * 1024 * 1024;
 
-function pickExtension(mimeType) {
-  const clean = cleanMime(mimeType);
-  if (!clean) return "bin";
-  const fromLib = mime.extension(clean);
-  if (fromLib) return fromLib;
-  if (clean === "audio/ogg" || clean === "audio/opus") return "ogg";
-  if (clean === "audio/mp4" || clean === "audio/x-m4a") return "m4a";
-  if (clean === "audio/mpeg") return "mp3";
-  if (clean === "image/jpeg" || clean === "image/jpg") return "jpg";
-  if (clean === "image/webp") return "webp";
-  if (clean === "image/png") return "png";
-  if (clean === "video/mp4") return "mp4";
-  return "bin";
-}
+// A extensão sai de uma allowlist (lib/media-safety.js) e NÃO de mime.extension()
+// aplicado ao mimetype que o remetente escolheu — era assim que um anexo
+// "text/html" virava um .html executável servido pela API.
+const pickExtension = safeExtension;
 
 export async function saveMedia(buffer, mimeType) {
+  if (!buffer?.length) throw new Error("mídia vazia");
+  if (buffer.length > MAX_MEDIA_BYTES) {
+    throw new Error(`mídia de ${Math.round(buffer.length / 1048576)} MB excede o limite de ${Math.round(MAX_MEDIA_BYTES / 1048576)} MB`);
+  }
   await fs.mkdir(config.paths.mediaDir, { recursive: true });
   const ext = pickExtension(mimeType);
   const filename = `${nanoid()}.${ext}`;
@@ -37,14 +32,27 @@ export async function saveMediaFromBuffer(buffer, mimeType) {
 }
 
 export function resolveMediaPath(filename) {
-  const safe = path.basename(filename);
-  return path.join(config.paths.mediaDir, safe);
+  const safe = path.basename(String(filename || ""));
+  const alvo = path.resolve(config.paths.mediaDir, safe);
+  // path.basename já barra "../", mas conferir o resultado final contra o
+  // diretório de mídia é a garantia que não depende do comportamento de uma
+  // função só (e cobre nome vazio, que resolveria para o próprio diretório).
+  const raiz = path.resolve(config.paths.mediaDir);
+  if (!safe || alvo === raiz || !alvo.startsWith(raiz + path.sep)) {
+    throw new Error("nome de arquivo inválido");
+  }
+  return alvo;
 }
 
 export async function downloadAndSaveFromUrl(url) {
   if (!url) return null;
   try {
-    const res = await fetch(url);
+    // Só HTTP(S), e com tempo máximo: a URL vem do servidor do WhatsApp (foto de
+    // perfil), mas tratar como não-confiável evita que um redirecionamento leve
+    // a fetch para um endereço interno da rede.
+    const alvo = new URL(String(url));
+    if (alvo.protocol !== "https:" && alvo.protocol !== "http:") return null;
+    const res = await fetch(alvo, { signal: AbortSignal.timeout(20000), redirect: "follow" });
     if (!res.ok) return null;
     const mimeType = res.headers.get("content-type") || "image/jpeg";
     const buffer = Buffer.from(await res.arrayBuffer());

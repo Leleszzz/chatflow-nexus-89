@@ -1,6 +1,7 @@
-import { Router } from "express";
-import { listConversations, getConversation, findConversationByDealId, upsertConversation, archiveConversation, restoreConversation, patchConversationCrm } from "../storage/conversations-repo.js";
+import { Router } from "../lib/safe-router.js";
+import { listConversations, listCrmOverlays, getConversation, findConversationByDealId, upsertConversation, archiveConversation, restoreConversation, patchConversationCrm } from "../storage/conversations-repo.js";
 import { listMessages } from "../storage/messages-repo.js";
+import { clampLimiteConversas } from "../storage/conversations-repo.js";
 import { buildConversationId, formatPhone, isPlaceholderName } from "../whatsapp/message-mapper.js";
 import { connectionManager } from "../whatsapp/ConnectionManager.js";
 import { requireAuth } from "../middleware/require-auth.js";
@@ -42,7 +43,7 @@ function chatIdFromPhone(phone) {
 }
 
 conversationsRouter.get("/", async (req, res) => {
-  const { instanceId, limit, offset, archived } = req.query;
+  const { instanceId, limit, offset, archived, q } = req.query;
   // Sem recorte por instância isto devolvia as conversas de TODAS as instâncias
   // para qualquer usuário logado.
   const permitidas = await allowedInstanceIdsForRequest(req);
@@ -53,11 +54,24 @@ conversationsRouter.get("/", async (req, res) => {
   const items = await listConversations({
     instanceId: instanceId ? String(instanceId) : undefined,
     instanceIds: instanceId ? undefined : permitidas ?? undefined,
-    limit: limit ? Number(limit) : undefined,
+    // clamp em vez de Number() cru: "?limit=abc" virava NaN, chegava no Mongo e
+    // a exceção derrubava o processo inteiro.
+    limit: clampLimiteConversas(limit),
     offset: offset ? Number(offset) : 0,
     archived: archived === "true" || archived === "1",
+    // Termo de busca vai para o banco: filtrar no cliente só acharia o que
+    // coube na página carregada.
+    busca: typeof q === "string" ? q.slice(0, 100) : undefined,
   });
   res.json(items);
+});
+
+// Overlay de CRM de todas as conversas visíveis, sem o resto do documento.
+// Precisa vir antes de GET /:id para não ser capturada por ele.
+conversationsRouter.get("/crm-overlays", async (req, res) => {
+  const permitidas = await allowedInstanceIdsForRequest(req);
+  const linhas = await listCrmOverlays(permitidas ?? undefined);
+  res.json(linhas);
 });
 
 // A conversa de um card do CRM. Duas rotas de dois segmentos não colidem com o
@@ -215,8 +229,10 @@ conversationsRouter.post("/:id/restore", requireAuth({ admin: true }), async (re
 
 conversationsRouter.get("/:id/messages", requireConversationAccess(), async (req, res) => {
   const conv = req.conversation;
-  const limit = req.query.limit ? Number(req.query.limit) : 50;
-  const before = req.query.before ? Number(req.query.before) : undefined;
-  const messages = await listMessages(conv.instanceId, conv.chatId, { before, limit });
+  // Sem conversão crua: listMessages já normaliza limit e before.
+  const messages = await listMessages(conv.instanceId, conv.chatId, {
+    before: req.query.before,
+    limit: req.query.limit,
+  });
   res.json(messages);
 });

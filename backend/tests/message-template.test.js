@@ -1,4 +1,4 @@
-// Testa o MESMO arquivo que o front usa (src/lib/message-template.js), sem cópia
+// Testa o MESMO arquivo que o front usa (shared/message-template.js), sem cópia
 // nem transformação — se a lógica mudar lá, estes testes pegam.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -7,7 +7,7 @@ import {
   variaveisDesconhecidas,
   saudacaoAgora,
   TEMPLATE_VARIABLES,
-} from "../../src/lib/message-template.js";
+} from "../../shared/message-template.js";
 
 const CTX = {
   nome: "Maria Silva Santos",

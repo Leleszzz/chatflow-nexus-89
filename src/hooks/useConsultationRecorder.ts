@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { saveChunk, clearSession } from "@/lib/recording-store";
+import { mensagemDeErro } from "@/lib/erros";
 
 export type RecorderState = "parado" | "gravando" | "pausado";
 
@@ -131,7 +132,7 @@ export function useConsultationRecorder() {
       timerRef.current = window.setInterval(() => setSeconds(decorrido()), 250);
       recorder.start(TIMESLICE_MS);
     } catch (err) {
-      const msg = (err as Error).message || String(err);
+      const msg = mensagemDeErro(err) || String(err);
       setError(`Não foi possível acessar o microfone: ${msg}`);
       throw err;
     }

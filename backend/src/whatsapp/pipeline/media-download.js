@@ -1,5 +1,5 @@
 import { downloadMediaMessage } from "@whiskeysockets/baileys";
-import { saveMediaFromBuffer } from "../../storage/media-repo.js";
+import { saveMediaFromBuffer, MAX_MEDIA_BYTES } from "../../storage/media-repo.js";
 import { extractContent, isMediaMessage } from "../message-mapper.js";
 
 const logger = { level: "fatal", child: () => logger, error() {}, warn() {}, info() {}, debug() {}, trace() {}, fatal() {} };
@@ -26,6 +26,22 @@ function isExpectedMediaError(err) {
 export async function downloadIfMedia(msg, sock) {
   if (!isMediaMessage(msg)) return {};
   try {
+    // O tamanho declarado pela mensagem é conferido ANTES de baixar. O buffer
+    // vem de um contato qualquer do WhatsApp e não havia teto nenhum: um vídeo
+    // grande o bastante estourava a memória do processo — e, com ele, todas as
+    // conexões de WhatsApp abertas. O peso declarado pode mentir, então
+    // saveMedia confere de novo no buffer real; esta checagem evita o download
+    // inútil no caso honesto.
+    const conteudo = extractContent(msg);
+    const declarado = Number(
+      conteudo?.imageMessage?.fileLength ?? conteudo?.videoMessage?.fileLength ??
+      conteudo?.audioMessage?.fileLength ?? conteudo?.documentMessage?.fileLength ?? 0,
+    );
+    if (Number.isFinite(declarado) && declarado > MAX_MEDIA_BYTES) {
+      console.warn(`[media-download] ignorado: ${Math.round(declarado / 1048576)} MB acima do limite`);
+      return {};
+    }
+
     const ctx = { logger };
     if (sock?.updateMediaMessage) ctx.reuploadRequest = sock.updateMediaMessage;
     const buffer = await downloadMediaMessage(msg, "buffer", {}, ctx);
@@ -33,7 +49,7 @@ export async function downloadIfMedia(msg, sock) {
     // extractContent desembrulha ephemeral/viewOnce/edited — sem ele uma
     // figurinha efêmera caía em application/octet-stream, era salva como .bin e
     // o <img> recusava o Content-Type.
-    const content = extractContent(msg);
+    const content = conteudo;
     const inner =
       content.imageMessage ||
       content.videoMessage ||

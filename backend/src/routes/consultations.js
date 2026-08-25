@@ -1,8 +1,9 @@
-import { Router } from "express";
+import { Router } from "../lib/safe-router.js";
 import multer from "multer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { config } from "../config.js";
 import { saveMedia, resolveMediaPath } from "../storage/media-repo.js";
 import {
   listConsultations,
@@ -15,7 +16,10 @@ import {
 import { createProntuario, deleteProntuario } from "../storage/prontuarios-repo.js";
 import { getDeal } from "../storage/deals-repo.js";
 import { canUserSeeDeal } from "../lib/deal-permissions.js";
+import { isAdmin } from "../lib/roles.js";
+import { registrarAsync, ACOES } from "../lib/auditoria.js";
 import { requireAuth } from "../middleware/require-auth.js";
+import { ROLES } from "../lib/roles.js";
 import { emitConsultationEvent } from "../socket/events.js";
 import { getTranscriptionSettings, getOpenaiSettings } from "../storage/settings-repo.js";
 import { transcribe } from "../lib/transcription/index.js";
@@ -24,9 +28,20 @@ import { mergeSuggestions, SUGGESTION_STATUS } from "../lib/transcription/sugges
 import { renderTranscript, buildSpeakers } from "../lib/transcription/render.js";
 
 // 200 MB cobre uma consulta de várias horas gravada em WebM pelo navegador.
-const upload = multer({ dest: "data/uploads", limits: { fileSize: 200 * 1024 * 1024 } });
+// Caminho ABSOLUTO: "data/uploads" é relativo ao diretório de onde o processo
+// foi iniciado, então iniciar o servidor de outro lugar espalhava temporários.
+const upload = multer({ dest: config.paths.uploadsDir, limits: { fileSize: 200 * 1024 * 1024 } });
 
 export const consultationsRouter = Router();
+
+// Transcrição de consulta é DADO CLÍNICO. src/lib/roles.ts já mantinha a tela
+// /consultas fora do alcance da secretária, com comentário explicando o porquê
+// — mas o backend só exigia "estar logado", e canUserSeeDeal devolve `true`
+// para secretária em todos os cards. Ou seja: um GET /api/consultations
+// autenticado como secretária devolvia TODAS as transcrições da clínica. O
+// bloqueio existia só na interface; agora existe aqui, que é onde vale.
+const exigeAcessoClinico = requireAuth({ roles: [ROLES.ADMIN, ROLES.DOUTOR] });
+consultationsRouter.use(exigeAcessoClinico);
 
 /** O usuário pode ver/mexer nesta consulta? Reusa a permissão do card. */
 async function assertAcesso(req, res, consultation) {
@@ -35,7 +50,18 @@ async function assertAcesso(req, res, consultation) {
     return false;
   }
   const deal = await getDeal(consultation.dealId);
-  if (deal && !canUserSeeDeal(req.user, deal)) {
+  // FAIL-CLOSED. Antes era `if (deal && !canUserSeeDeal(...))`: com o card
+  // excluído, `deal` vinha null e a checagem inteira era pulada — qualquer
+  // usuário lia, editava e apagava a consulta órfã, transcrição clínica
+  // incluída. Sem card para ancorar a permissão, só o admin passa.
+  if (!deal) {
+    if (!isAdmin(req.user)) {
+      res.status(403).json({ error: "consulta sem cliente vinculado — acesso restrito a administradores" });
+      return false;
+    }
+    return true;
+  }
+  if (!canUserSeeDeal(req.user, deal)) {
     res.status(403).json({ error: "sem permissão para esta consulta" });
     return false;
   }
@@ -111,7 +137,7 @@ async function processConsultation(io, consultationId, sourcePath) {
   }
 }
 
-consultationsRouter.get("/", requireAuth(), async (req, res) => {
+consultationsRouter.get("/", async (req, res) => {
   try {
     const dealId = req.query.dealId ? String(req.query.dealId) : undefined;
     const todas = await listConsultations({ dealId });
@@ -121,7 +147,9 @@ consultationsRouter.get("/", requireAuth(), async (req, res) => {
     for (const c of todas) {
       if (!deals.has(c.dealId)) deals.set(c.dealId, await getDeal(c.dealId));
       const deal = deals.get(c.dealId);
-      if (!deal || canUserSeeDeal(req.user, deal)) visiveis.push(c);
+      // Órfã (card excluído) só aparece para admin — antes `!deal` incluía a
+      // consulta na lista de qualquer usuário.
+      if (deal ? canUserSeeDeal(req.user, deal) : isAdmin(req.user)) visiveis.push(c);
     }
     res.json(visiveis);
   } catch (err) {
@@ -129,10 +157,13 @@ consultationsRouter.get("/", requireAuth(), async (req, res) => {
   }
 });
 
-consultationsRouter.get("/:id", requireAuth(), async (req, res) => {
+consultationsRouter.get("/:id", async (req, res) => {
   try {
     const item = await getConsultation(req.params.id);
     if (!(await assertAcesso(req, res, item))) return;
+    // Transcricao de consulta e o dado mais sensivel do sistema: cada leitura
+    // fica registrada.
+    registrarAsync(req, ACOES.LER_CONSULTA, { consultaId: item.id, dealId: item.dealId });
     res.json(item);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -141,7 +172,7 @@ consultationsRouter.get("/:id", requireAuth(), async (req, res) => {
 
 // requireAuth ANTES do multer: requisição não autenticada não grava arquivo em
 // disco. Mesmo motivo do comentário em routes/send.js.
-consultationsRouter.post("/upload", requireAuth(), upload.single("file"), async (req, res) => {
+consultationsRouter.post("/upload", upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "file é obrigatório" });
   let responded = false;
   try {
@@ -198,7 +229,7 @@ consultationsRouter.post("/upload", requireAuth(), upload.single("file"), async 
   }
 });
 
-consultationsRouter.patch("/:id", requireAuth(), async (req, res) => {
+consultationsRouter.patch("/:id", async (req, res) => {
   try {
     const atual = await getConsultation(req.params.id);
     if (!(await assertAcesso(req, res, atual))) return;
@@ -222,7 +253,7 @@ consultationsRouter.patch("/:id", requireAuth(), async (req, res) => {
 });
 
 // Reprocessa a partir do áudio já salvo — não exige regravar a consulta.
-consultationsRouter.post("/:id/retry", requireAuth(), async (req, res) => {
+consultationsRouter.post("/:id/retry", async (req, res) => {
   try {
     const atual = await getConsultation(req.params.id);
     if (!(await assertAcesso(req, res, atual))) return;
@@ -252,7 +283,7 @@ consultationsRouter.post("/:id/retry", requireAuth(), async (req, res) => {
   }
 });
 
-consultationsRouter.post("/:id/summary", requireAuth(), async (req, res) => {
+consultationsRouter.post("/:id/summary", async (req, res) => {
   try {
     const atual = await getConsultation(req.params.id);
     if (!(await assertAcesso(req, res, atual))) return;
@@ -280,7 +311,7 @@ consultationsRouter.post("/:id/summary", requireAuth(), async (req, res) => {
 // Marca uma sugestão como executada ou dispensada. Endpoint próprio, e não o
 // array inteiro no PATCH /:id, para que dois cliques seguidos (ou duas abas) não
 // se sobrescrevam.
-consultationsRouter.patch("/:id/suggestions/:sugestaoId", requireAuth(), async (req, res) => {
+consultationsRouter.patch("/:id/suggestions/:sugestaoId", async (req, res) => {
   try {
     const atual = await getConsultation(req.params.id);
     if (!(await assertAcesso(req, res, atual))) return;
@@ -307,7 +338,7 @@ consultationsRouter.patch("/:id/suggestions/:sugestaoId", requireAuth(), async (
   }
 });
 
-consultationsRouter.delete("/:id", requireAuth(), async (req, res) => {
+consultationsRouter.delete("/:id", async (req, res) => {
   try {
     const atual = await getConsultation(req.params.id);
     if (!(await assertAcesso(req, res, atual))) return;
@@ -321,10 +352,10 @@ consultationsRouter.delete("/:id", requireAuth(), async (req, res) => {
   }
 });
 
-consultationsRouter.delete("/by-deal/:dealId", requireAuth(), async (req, res) => {
+consultationsRouter.delete("/by-deal/:dealId", async (req, res) => {
   try {
     const deal = await getDeal(req.params.dealId);
-    if (deal && !canUserSeeDeal(req.user, deal)) {
+    if (deal ? !canUserSeeDeal(req.user, deal) : !isAdmin(req.user)) {
       return res.status(403).json({ error: "sem permissão para este cliente" });
     }
     const removidas = await deleteConsultationsByDeal(req.params.dealId);

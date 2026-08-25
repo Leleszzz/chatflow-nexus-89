@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router } from "../lib/safe-router.js";
 import {
   buildAudience,
   resolveConversations,
@@ -13,13 +13,19 @@ import {
   DEFAULT_THROTTLE_MS,
 } from "../storage/campaigns-repo.js";
 import { requireAuth } from "../middleware/require-auth.js";
+import { registrarAsync, ACOES } from "../lib/auditoria.js";
 
 export const campaignsRouter = Router();
 
-campaignsRouter.use(requireAuth());
+// TODO o router é de admin — e não só as rotas de escrita.
+//
+// Antes, `GET /:id/targets` entregava nome + telefone de cada contato atingido,
+// e `POST /preview` rodava sobre a coleção inteira de conversas sem nenhum
+// recorte por instância: qualquer usuário autenticado extraía a base de
+// telefones da clínica. A tela /campanhas já era exclusiva do admin no front
+// (src/lib/roles.ts), mas isso é bloqueio de interface, não de permissão.
+campaignsRouter.use(requireAuth({ admin: true }));
 
-// Enviar em massa é ação de gestão: qualquer usuário pode ver as campanhas e
-// simular o público, mas criar/disparar é restrito ao admin.
 const requireAdmin = requireAuth({ admin: true });
 
 function audienceFiltersFrom(body) {
@@ -50,6 +56,8 @@ campaignsRouter.post("/preview", async (req, res) => {
     ? await resolveConversations(manualIds)
     : await buildAudience(audienceFiltersFrom(req.body));
 
+  // Montar publico e a operacao que devolve telefone de cliente em lote.
+  registrarAsync(req, ACOES.EXPORTAR_PUBLICO, { total: audience.length, manual: manualIds.length });
   res.json({
     total: audience.length,
     // Amostra só para conferência visual — o público real é remontado no POST.
@@ -101,6 +109,7 @@ campaignsRouter.post("/:id/start", requireAdmin, async (req, res) => {
   if (await countPending(req.params.id) === 0) {
     return res.status(400).json({ error: "não há contatos pendentes nesta campanha" });
   }
+  registrarAsync(req, ACOES.DISPARAR_CAMPANHA, { campanhaId: req.params.id, nome: campaign.name });
   res.json(await updateCampaignStatus(req.params.id, "rodando"));
 });
 

@@ -7,6 +7,7 @@ import { Deal, DealStage, Agent, AgentUsage, ALL_TAGS, STAGES, Stage, CustomFiel
 import { ROLES, seesAllDeals, roleHasPermission, isAtendente, normalizeRole, type PermissionKey, type Role } from "@/lib/roles";
 import { whatsappApi, UserRecord, ProntuarioAttachment, ProntuarioCategory, Consultation } from "@/lib/whatsapp-api";
 import { getSocket, reconnectSocket } from "@/lib/whatsapp-socket";
+import { mensagemDeErro } from "@/lib/erros";
 
 const inferProntuarioCategory = (
   messageType?: string,
@@ -155,7 +156,8 @@ interface CRMCtx {
   isDoutor: boolean;
   isSecretaria: boolean;
   currentRole: Role | null;
-  login: (identifier: string, password: string) => Promise<boolean>;
+  /** `{ ok: false, motivo }` quando falha — o motivo já vem pronto para exibir. */
+  login: (identifier: string, password: string) => Promise<{ ok: true } | { ok: false; motivo: string }>;
   logout: () => void;
   hasPermission: (permission: PermissionKey) => boolean;
   canViewDeal: (deal: Deal) => boolean;
@@ -468,14 +470,17 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   // reindexado por conversationId, que é o formato que as telas já consomem.
   const refreshConversationPatches = useCallback(async () => {
     try {
-      const conversas = await whatsappApi.listConversations();
+      // Endpoint dedicado: antes isto baixava a lista COMPLETA de conversas só
+      // para reindexar o overlay. Com a listagem paginada, esse caminho passaria
+      // a perder o overlay de tudo que não coubesse na primeira página.
+      const linhas = await whatsappApi.listCrmOverlays();
       const indexado: Record<string, CrmPatch> = {};
-      for (const conversa of conversas) {
-        if (conversa.crm && Object.keys(conversa.crm).length) indexado[conversa.id] = conversa.crm;
+      for (const linha of linhas) {
+        if (linha.crm && Object.keys(linha.crm).length) indexado[linha.id] = linha.crm;
       }
       setConversationPatches(indexado);
     } catch (err) {
-      console.warn("[crm-store] listConversations (crm) failed", err);
+      console.warn("[crm-store] listCrmOverlays failed", err);
     }
   }, []);
 
@@ -683,10 +688,13 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       // O socket já está conectado com a credencial antiga (nenhuma): reconecta
       // para o servidor reavaliar o cookie no handshake.
       reconnectSocket();
-      return true;
+      return { ok: true as const };
     } catch (err) {
       console.warn("[crm-store] login failed", err);
-      return false;
+      // Devolve o MOTIVO, e não só `false`: com rate limit no login, mostrar
+      // "usuário ou senha inválidos" para quem foi bloqueado por tentativas
+      // demais faz a pessoa insistir e prolongar o bloqueio.
+      return { ok: false as const, motivo: mensagemDeErro(err, "Usuário ou senha inválidos") };
     }
   };
 
@@ -747,9 +755,10 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       return mudou ? next : prev;
     });
     whatsappApi.deleteDeal(id).catch(err => console.warn("[crm-store] deleteDeal failed", err));
-    whatsappApi.deleteProntuariosByDeal(id).catch(err => {
-      console.warn("[crm-store] deleteProntuariosByDeal failed", err);
-    });
+    // A cascata de prontuário roda no servidor, dentro de DELETE /api/deals/:id:
+    // é lá que a permissão do card já foi verificada. Chamar daqui deixava anexo
+    // órfão quando a requisição falhava, e passava a dar 403 para a secretária
+    // depois que prontuário virou rota restrita a admin/doutor.
   };
   const moveDeal = (id: string, stage: DealStage) => {
     setDeals(prev => prev.map(d => (d.id === id ? { ...d, stage } : d)));

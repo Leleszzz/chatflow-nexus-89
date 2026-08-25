@@ -1,4 +1,5 @@
 import { getCol, collections } from "./mongo.js";
+import { cifrar, decifrar } from "../lib/segredos.js";
 
 const col = () => getCol(collections.settings);
 const DOC_ID = "app";
@@ -99,12 +100,15 @@ export async function getSettings() {
 
 export async function getOpenaiSettings() {
   const settings = await getSettings();
-  return settings.openai;
+  // Decifrado só na leitura: a chave nunca fica em claro no banco quando
+  // SECRETS_KEY está configurada.
+  return { ...settings.openai, apiKey: decifrar(settings.openai.apiKey) };
 }
 
 export async function setOpenaiSettings(patch) {
   const current = await getSettings();
   const openai = { ...DEFAULTS.openai, ...(current.openai || {}), ...patch };
+  if (patch && "apiKey" in patch) openai.apiKey = cifrar(patch.apiKey);
   await col().updateOne({ _id: DOC_ID }, { $set: { openai } }, { upsert: true });
   return { ...current, openai };
 }
@@ -114,7 +118,12 @@ export async function clearOpenaiKey() {
 }
 
 export async function getTranscriptionSettings() {
-  return (await getSettings()).transcription;
+  const t = (await getSettings()).transcription;
+  return {
+    ...t,
+    groqApiKey: decifrar(t.groqApiKey),
+    assemblyaiApiKey: decifrar(t.assemblyaiApiKey),
+  };
 }
 
 // Chave vazia no patch NÃO apaga a chave gravada: a tela manda o formulário
@@ -127,7 +136,19 @@ export async function setTranscriptionSettings(patch) {
     if (!incoming[field]) delete incoming[field];
   }
   const next = normalizeTranscription({ ...current, ...incoming });
-  await col().updateOne({ _id: DOC_ID }, { $set: { transcription: next } }, { upsert: true });
+  await col().updateOne(
+    { _id: DOC_ID },
+    {
+      $set: {
+        transcription: {
+          ...next,
+          groqApiKey: cifrar(next.groqApiKey),
+          assemblyaiApiKey: cifrar(next.assemblyaiApiKey),
+        },
+      },
+    },
+    { upsert: true },
+  );
   return next;
 }
 
@@ -135,7 +156,19 @@ export async function clearTranscriptionKey(provider) {
   const field = provider === "assemblyai" ? "assemblyaiApiKey" : "groqApiKey";
   const current = await getTranscriptionSettings();
   const next = normalizeTranscription({ ...current, [field]: "" });
-  await col().updateOne({ _id: DOC_ID }, { $set: { transcription: next } }, { upsert: true });
+  await col().updateOne(
+    { _id: DOC_ID },
+    {
+      $set: {
+        transcription: {
+          ...next,
+          groqApiKey: cifrar(next.groqApiKey),
+          assemblyaiApiKey: cifrar(next.assemblyaiApiKey),
+        },
+      },
+    },
+    { upsert: true },
+  );
   return next;
 }
 

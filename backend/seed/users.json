@@ -1,0 +1,62 @@
+[
+  {
+    "id": "admin",
+    "name": "Administrador",
+    "username": "admin",
+    "avatar": "AD",
+    "email": "admin@empresa.com",
+    "phone": "",
+    "role": "admin",
+    "passwordHash": "PPGgt2vFRJ6j0c7xE0h0WUdqbP64TFvOWGV-olZM2Tw",
+    "passwordSalt": "NKTJLjGgAiaZuBMMCXmMFw",
+    "active": true
+  },
+  {
+    "id": "s1",
+    "name": "Ana Paula",
+    "username": "ana",
+    "avatar": "AP",
+    "email": "ana.paula@empresa.com",
+    "phone": "+55 11 98765-4321",
+    "role": "doutor",
+    "passwordHash": "P9EOK16tkzl_JRlSKyBy6tcHS5rxvWjV828o_ByPIyE",
+    "passwordSalt": "0kfd_hSYMjr68eI1IAuGvQ",
+    "active": true
+  },
+  {
+    "id": "s2",
+    "name": "Bruno Costa",
+    "username": "bruno",
+    "avatar": "BC",
+    "email": "bruno.costa@empresa.com",
+    "phone": "",
+    "role": "secretaria",
+    "passwordHash": "KPzG2AYuIkmLJfZcKua8Uh9c241uVdjm2sYq_zjFhaw",
+    "passwordSalt": "qC1PuyBQsi-B2c0J4BA8Ig",
+    "active": true
+  },
+  {
+    "id": "s3",
+    "name": "Carla Mendes",
+    "username": "carla",
+    "avatar": "CM",
+    "email": "carla.mendes@empresa.com",
+    "phone": "",
+    "role": "secretaria",
+    "passwordHash": "3ApAMxZJ78HHi30gIP1nx1BBSw_l8hyy1GxDYZg5QJM",
+    "passwordSalt": "ADaJSTKc1ywxHHa4RDjAIQ",
+    "active": true
+  },
+  {
+    "id": "s4",
+    "name": "Diego Silva",
+    "username": "diego",
+    "avatar": "DS",
+    "email": "diego.silva@empresa.com",
+    "phone": "",
+    "role": "secretaria",
+    "passwordHash": "hmII2DlzufW9vITi3WARy194TjD6RtEuZLjv2R19G9U",
+    "passwordSalt": "fdxcthrcXsjUQuy4WUPhFw",
+    "active": true
+  }
+]

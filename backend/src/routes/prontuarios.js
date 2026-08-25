@@ -1,10 +1,13 @@
-import { Router } from "express";
+import { Router } from "../lib/safe-router.js";
 import multer from "multer";
 import fs from "node:fs/promises";
 import { saveMedia } from "../storage/media-repo.js";
 import { getDeal } from "../storage/deals-repo.js";
 import { canUserSeeDeal } from "../lib/deal-permissions.js";
 import { requireAuth } from "../middleware/require-auth.js";
+import { ROLES, isAdmin } from "../lib/roles.js";
+import { registrarAsync, ACOES } from "../lib/auditoria.js";
+import { config } from "../config.js";
 import {
   listProntuarios,
   getProntuario,
@@ -14,7 +17,7 @@ import {
   deleteProntuariosByDeal,
 } from "../storage/prontuarios-repo.js";
 
-const upload = multer({ dest: "data/uploads", limits: { fileSize: 50 * 1024 * 1024 } });
+const upload = multer({ dest: config.paths.uploadsDir, limits: { fileSize: 50 * 1024 * 1024 } });
 
 const VALID_CATEGORIES = new Set(["foto", "video", "audio", "documento", "outro"]);
 
@@ -28,12 +31,15 @@ function inferCategoryFromMime(mimeType) {
 }
 
 // O anexo herda a permissão do card a que pertence: quem não pode ver o lead
-// não pode ver, alterar nem apagar os arquivos do prontuário dele. Um deal que
-// já não existe libera o acesso — é lixo órfão, e travá-lo só impediria a
-// limpeza.
+// não pode ver, alterar nem apagar os arquivos do prontuário dele.
 async function podeAcessarDeal(user, dealId) {
   const deal = await getDeal(dealId);
-  return !deal || canUserSeeDeal(user, deal);
+  // FAIL-CLOSED para anexo órfão. O comentário acima defendia liberar o que
+  // aponta para um card que já não existe, para não travar a limpeza — mas isso
+  // deixava foto e documento clínico de um paciente excluído legíveis por
+  // qualquer usuário. A limpeza continua possível: o admin passa.
+  if (!deal) return isAdmin(user);
+  return canUserSeeDeal(user, deal);
 }
 
 async function assertAcesso(req, res, anexo) {
@@ -50,7 +56,12 @@ async function assertAcesso(req, res, anexo) {
 
 export const prontuariosRouter = Router();
 
-prontuariosRouter.get("/", requireAuth(), async (req, res) => {
+// Prontuário é dado clínico, como a consulta gravada: src/lib/roles.ts já
+// mantinha a tela fora do alcance da secretária, mas o backend aceitava
+// qualquer usuário logado.
+prontuariosRouter.use(requireAuth({ roles: [ROLES.ADMIN, ROLES.DOUTOR] }));
+
+prontuariosRouter.get("/", async (req, res) => {
   try {
     const dealId = req.query.dealId ? String(req.query.dealId) : undefined;
     const items = await listProntuarios({ dealId });
@@ -68,17 +79,18 @@ prontuariosRouter.get("/", requireAuth(), async (req, res) => {
   }
 });
 
-prontuariosRouter.get("/:id", requireAuth(), async (req, res) => {
+prontuariosRouter.get("/:id", async (req, res) => {
   try {
     const item = await getProntuario(req.params.id);
     if (!(await assertAcesso(req, res, item))) return;
+    registrarAsync(req, ACOES.LER_PRONTUARIO, { prontuarioId: item.id, dealId: item.dealId });
     res.json(item);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-prontuariosRouter.post("/", requireAuth(), async (req, res) => {
+prontuariosRouter.post("/", async (req, res) => {
   try {
     const body = req.body || {};
     const dealId = String(body.dealId || "").trim();
@@ -112,7 +124,7 @@ prontuariosRouter.post("/", requireAuth(), async (req, res) => {
 
 // requireAuth ANTES do multer: requisição não autenticada não grava arquivo em
 // disco. Mesmo motivo do comentário em routes/send.js.
-prontuariosRouter.post("/upload", requireAuth(), upload.single("file"), async (req, res) => {
+prontuariosRouter.post("/upload", upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "file é obrigatório" });
   try {
     const dealId = String(req.body?.dealId || "").trim();
@@ -146,7 +158,7 @@ prontuariosRouter.post("/upload", requireAuth(), upload.single("file"), async (r
   }
 });
 
-prontuariosRouter.patch("/:id", requireAuth(), async (req, res) => {
+prontuariosRouter.patch("/:id", async (req, res) => {
   try {
     const current = await getProntuario(req.params.id);
     if (!(await assertAcesso(req, res, current))) return;
@@ -164,7 +176,7 @@ prontuariosRouter.patch("/:id", requireAuth(), async (req, res) => {
   }
 });
 
-prontuariosRouter.delete("/:id", requireAuth(), async (req, res) => {
+prontuariosRouter.delete("/:id", async (req, res) => {
   try {
     const current = await getProntuario(req.params.id);
     if (!(await assertAcesso(req, res, current))) return;
@@ -176,7 +188,7 @@ prontuariosRouter.delete("/:id", requireAuth(), async (req, res) => {
   }
 });
 
-prontuariosRouter.delete("/by-deal/:dealId", requireAuth(), async (req, res) => {
+prontuariosRouter.delete("/by-deal/:dealId", async (req, res) => {
   try {
     if (!(await podeAcessarDeal(req.user, req.params.dealId))) {
       return res.status(403).json({ error: "sem permissão para este cliente" });

@@ -18,6 +18,7 @@ import {
 } from "@/lib/consultation-actions";
 import { computeFreeTimeButtons, conflitosNoHorario, minutesFromTime, timeFromMinutes } from "@/lib/agenda";
 import { isAtendente } from "@/lib/roles";
+import { mensagemDeErro } from "@/lib/erros";
 
 const TIPOS: { valor: AppointmentType; rotulo: string }[] = [
   { valor: "retorno", rotulo: "Retorno" },
@@ -139,7 +140,7 @@ export function ScheduleFollowUpDialog({ open, onOpenChange, payload, deal, conv
           textoConfirmacao({ nome, data, hora }),
         );
       } catch (err) {
-        problemas.push(`confirmação não enviada (${(err as Error).message})`);
+        problemas.push(`confirmação não enviada (${mensagemDeErro(err)})`);
       }
     }
 
@@ -163,7 +164,7 @@ export function ScheduleFollowUpDialog({ open, onOpenChange, payload, deal, conv
             note: "Lembrete de consulta",
           });
         } catch (err) {
-          problemas.push(`lembrete não agendado (${(err as Error).message})`);
+          problemas.push(`lembrete não agendado (${mensagemDeErro(err)})`);
         }
       }
     }

@@ -1,30 +1,75 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { whatsappApi, WAConversation, WAMessage } from "@/lib/whatsapp-api";
 import { getSocket, joinInstance } from "@/lib/whatsapp-socket";
+import { mensagemDeErro } from "@/lib/erros";
 
-export function useWhatsAppConversations() {
+// Tamanho da página da caixa de entrada. A listagem agora é paginada NO BANCO
+// (antes o backend materializava a coleção inteira em memória a cada abertura
+// da tela, de cada usuário).
+const PAGINA_CONVERSAS = 300;
+
+export function useWhatsAppConversations(busca?: string) {
   const [conversations, setConversations] = useState<WAConversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [temMais, setTemMais] = useState(false);
+  const [carregandoMais, setCarregandoMais] = useState(false);
   const joined = useRef<Set<string>>(new Set());
+
+  const termo = (busca || "").trim();
+
+  const entrarNasSalas = useCallback((lista: WAConversation[]) => {
+    lista.forEach(c => {
+      if (!joined.current.has(c.instanceId)) {
+        joinInstance(c.instanceId);
+        joined.current.add(c.instanceId);
+      }
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
       setError(null);
-      const data = await whatsappApi.listConversations();
-      setConversations(data);
-      data.forEach(c => {
-        if (!joined.current.has(c.instanceId)) {
-          joinInstance(c.instanceId);
-          joined.current.add(c.instanceId);
-        }
+      const data = await whatsappApi.listConversations({
+        limit: PAGINA_CONVERSAS,
+        busca: termo || undefined,
       });
+      setConversations(data);
+      setTemMais(data.length >= PAGINA_CONVERSAS);
+      entrarNasSalas(data);
     } catch (err) {
-      setError((err as Error).message);
+      setError(mensagemDeErro(err));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [termo, entrarNasSalas]);
+
+  /** Próxima página da caixa de entrada (botão "carregar mais"). */
+  const carregarMais = useCallback(async () => {
+    if (carregandoMais || !temMais) return;
+    setCarregandoMais(true);
+    try {
+      const proxima = await whatsappApi.listConversations({
+        limit: PAGINA_CONVERSAS,
+        offset: conversations.length,
+        busca: termo || undefined,
+      });
+      if (!proxima.length) {
+        setTemMais(false);
+        return;
+      }
+      setConversations(atual => {
+        const conhecidas = new Set(atual.map(c => c.id));
+        return [...atual, ...proxima.filter(c => !conhecidas.has(c.id))];
+      });
+      setTemMais(proxima.length >= PAGINA_CONVERSAS);
+      entrarNasSalas(proxima);
+    } catch (err) {
+      console.warn("carregarMais failed:", err);
+    } finally {
+      setCarregandoMais(false);
+    }
+  }, [conversations.length, termo, temMais, carregandoMais, entrarNasSalas]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -77,26 +122,77 @@ export function useWhatsAppConversations() {
     }
   }, []);
 
-  return { conversations, loading, error, refresh, markRead };
+  return { conversations, loading, error, refresh, markRead, carregarMais, carregandoMais, temMais };
 }
+
+// Quantas mensagens vêm por página. O backend limita a 200; 60 é o suficiente
+// para encher a tela e deixa o carregamento inicial leve.
+const PAGINA_MENSAGENS = 60;
 
 export function useWhatsAppMessages(conversationId: string | null | undefined) {
   const [messages, setMessages] = useState<WAMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [carregandoAntigas, setCarregandoAntigas] = useState(false);
+  const [temMaisAntigas, setTemMaisAntigas] = useState(false);
 
   useEffect(() => {
     if (!conversationId) {
       setMessages([]);
+      setTemMaisAntigas(false);
       return;
     }
     let cancelled = false;
     setLoading(true);
-    whatsappApi.getMessages(conversationId, { limit: 100 })
-      .then(data => { if (!cancelled) setMessages(data); })
+    setTemMaisAntigas(false);
+    whatsappApi.getMessages(conversationId, { limit: PAGINA_MENSAGENS })
+      .then(data => {
+        if (cancelled) return;
+        setMessages(data);
+        // Página cheia provavelmente significa que há mais para trás.
+        setTemMaisAntigas(data.length >= PAGINA_MENSAGENS);
+      })
       .catch(err => console.warn("getMessages failed:", err))
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [conversationId]);
+
+  /**
+   * Carrega a página anterior do histórico.
+   *
+   * Antes o hook buscava 100 mensagens e ponto: conversa mais longa que isso
+   * tinha o começo INALCANÇÁVEL pela interface, mesmo com a API já aceitando
+   * `before` desde sempre. Para um atendimento de clínica, perder o histórico
+   * é perder o contexto do paciente.
+   */
+  const carregarAntigas = useCallback(async () => {
+    if (!conversationId || carregandoAntigas || !temMaisAntigas) return;
+    const maisAntiga = messages[0];
+    if (!maisAntiga) return;
+
+    setCarregandoAntigas(true);
+    try {
+      const anteriores = await whatsappApi.getMessages(conversationId, {
+        before: maisAntiga.timestamp,
+        limit: PAGINA_MENSAGENS,
+      });
+      if (!anteriores.length) {
+        setTemMaisAntigas(false);
+        return;
+      }
+      setMessages(atual => {
+        // Dedupe por id: `before` usa timestamp, e duas mensagens no mesmo
+        // segundo fariam a página repetir uma delas.
+        const conhecidas = new Set(atual.map(m => m.id));
+        const novas = anteriores.filter(m => !conhecidas.has(m.id));
+        return novas.length ? [...novas, ...atual] : atual;
+      });
+      setTemMaisAntigas(anteriores.length >= PAGINA_MENSAGENS);
+    } catch (err) {
+      console.warn("carregarAntigas failed:", err);
+    } finally {
+      setCarregandoAntigas(false);
+    }
+  }, [conversationId, messages, carregandoAntigas, temMaisAntigas]);
 
   useEffect(() => {
     if (!conversationId) return;
@@ -140,5 +236,5 @@ export function useWhatsAppMessages(conversationId: string | null | undefined) {
     };
   }, [conversationId]);
 
-  return { messages, loading, setMessages };
+  return { messages, loading, setMessages, carregarAntigas, carregandoAntigas, temMaisAntigas };
 }

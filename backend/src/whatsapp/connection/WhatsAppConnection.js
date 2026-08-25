@@ -21,6 +21,7 @@ import { suppressLibsignalSessionLogs } from "../suppress-libsignal-logs.js";
 import { getCachedBaileysVersion } from "./baileys-version.js";
 import { pickBrowser } from "./browser-fingerprint.js";
 import { JidResolver } from "./jid-resolver.js";
+import { LruMap } from "../../lib/lru-map.js";
 import { MediaQueue } from "../pipeline/MediaQueue.js";
 import { MessagePipeline } from "../pipeline/MessagePipeline.js";
 import { downloadIfMedia } from "../pipeline/media-download.js";
@@ -55,8 +56,14 @@ export class WhatsAppConnection extends EventEmitter {
     this.sock = null;
     this.saveCreds = null;
     this._listeners = [];
-    this.chatsById = new Map();
-    this.contactsByJid = new Map();
+    // LRU, e não Map comum: estes dois caches recebiam TODO o histórico
+    // sincronizado e nunca eram podados. Com muitos contatos por instância a
+    // memória só subia até o processo morrer — derrubando junto todas as
+    // conexões de WhatsApp. É cache de nome/metadado: perder o mais antigo
+    // custa uma consulta, não corretude.
+    const TETO_CACHE = Number(process.env.WA_CACHE_MAX || 10000);
+    this.chatsById = new LruMap(TETO_CACHE);
+    this.contactsByJid = new LruMap(TETO_CACHE);
     // Dedupe de jobs de avatar concorrentes para a mesma conversa. NÃO é marca
     // de "já tentou": quem evita o retrabalho é o `avatarUrl` já gravado.
     this._avatarInFlight = new Set();

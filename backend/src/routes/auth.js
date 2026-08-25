@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router } from "../lib/safe-router.js";
 import {
   findByIdentifier,
   getUser,
@@ -7,12 +7,36 @@ import {
 } from "../storage/users-repo.js";
 import { hashPassword, verifyPassword } from "../lib/password.js";
 import { createAuthToken } from "../lib/auth-token.js";
-import { setAuthCookie, clearAuthCookie } from "../lib/auth-cookie.js";
+import { setAuthCookie, clearAuthCookie, garantirCookieCsrf } from "../lib/auth-cookie.js";
 import { requireAuth } from "../middleware/require-auth.js";
+import { loginLimiter, senhaLimiter } from "../middleware/rate-limit.js";
 
 export const authRouter = Router();
 
-authRouter.post("/login", async (req, res) => {
+// 6 caracteres sem nenhuma outra exigência era fraco demais para um sistema
+// exposto na internet que guarda prontuário. As senhas óbvias entram na lista
+// porque são as primeiras que qualquer ataque de dicionário tenta.
+const SENHAS_PROIBIDAS = new Set([
+  "123456", "1234567", "12345678", "123456789", "1234567890",
+  "senha123", "password", "admin123", "qwerty123", "clinica123",
+  "abc12345", "000000", "111111", "senha1234",
+]);
+
+export function validarForcaSenha(senha) {
+  if (typeof senha !== "string" || senha.length < 10) {
+    return "A senha deve ter pelo menos 10 caracteres";
+  }
+  if (senha.length > 200) return "A senha é longa demais";
+  if (SENHAS_PROIBIDAS.has(senha.toLowerCase())) {
+    return "Essa senha é fácil demais de adivinhar — escolha outra";
+  }
+  if (!/[a-zA-Z]/.test(senha) || !/[0-9]/.test(senha)) {
+    return "A senha deve misturar letras e números";
+  }
+  return null;
+}
+
+authRouter.post("/login", loginLimiter, async (req, res) => {
   const identifier = typeof req.body?.identifier === "string" ? req.body.identifier : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
   if (!identifier.trim() || !password) {
@@ -37,17 +61,22 @@ authRouter.post("/logout", (_req, res) => {
 });
 
 authRouter.get("/me", requireAuth(), async (req, res) => {
+  // Reemite o cookie CSRF quando ele falta (sessao antiga, aba restaurada) —
+  // sem isso o usuario logado ficaria sem conseguir gravar nada.
+  garantirCookieCsrf(req, res);
   res.json({ user: sanitizeUser(req.user) });
 });
 
-authRouter.post("/change-password", requireAuth(), async (req, res) => {
+authRouter.post("/change-password", senhaLimiter, requireAuth(), async (req, res) => {
   const currentPassword = typeof req.body?.currentPassword === "string" ? req.body.currentPassword : "";
   const newPassword = typeof req.body?.newPassword === "string" ? req.body.newPassword : "";
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ error: "currentPassword e newPassword são obrigatórios" });
   }
-  if (newPassword.length < 6) {
-    return res.status(400).json({ error: "A nova senha deve ter pelo menos 6 caracteres" });
+  const problemaSenha = validarForcaSenha(newPassword);
+  if (problemaSenha) return res.status(400).json({ error: problemaSenha, code: "SENHA_FRACA" });
+  if (newPassword === currentPassword) {
+    return res.status(400).json({ error: "A nova senha precisa ser diferente da atual", code: "SENHA_REPETIDA" });
   }
 
   const fresh = await getUser(req.user.id);

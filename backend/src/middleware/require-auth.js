@@ -8,7 +8,7 @@ import { ROLES } from "../lib/roles.js";
 export function requireAuth(options = {}) {
   const { admin = false, roles = null } = options;
   const permitidos = admin ? [ROLES.ADMIN] : roles;
-  return async (req, res, next) => {
+  const middleware = async (req, res, next) => {
     const token = readAuthCookie(req.headers.cookie);
     if (!token) return res.status(401).json({ error: "Token ausente" });
     const payload = verifyAuthToken(token);
@@ -27,4 +27,11 @@ export function requireAuth(options = {}) {
     req.tokenPayload = payload;
     next();
   };
+
+  // Metadado para os testes conseguirem afirmar, olhando o router montado, que
+  // uma rota sensível continua com a restrição de cargo. Sem isto o teste teria
+  // que inspecionar o texto do arquivo, e um `requireAuth()` removido por
+  // engano passaria despercebido até virar incidente.
+  middleware.exigeCargos = permitidos ? [...permitidos] : null;
+  return middleware;
 }

@@ -2,7 +2,7 @@ import { listInstances } from "../storage/instances-repo.js";
 import { listUsers } from "../storage/users-repo.js";
 import { getDeal } from "../storage/deals-repo.js";
 import { permittedUserIds } from "../lib/deal-permissions.js";
-import { socketAuth, canJoinInstance } from "./auth.js";
+import { socketAuth, canJoinInstance, revalidarSocket } from "./auth.js";
 
 export function emitToInstance(io, instanceId, event, payload) {
   if (!io) return;
@@ -51,6 +51,34 @@ export async function emitConsultationEvent(io, event, consultation) {
   }
 }
 
+// De quanto em quanto tempo um socket conectado tem cargo e instâncias
+// reconferidos contra o banco.
+const REVALIDAR_A_CADA_MS = Number(process.env.SOCKET_REVALIDAR_MS || 5 * 60 * 1000);
+
+/**
+ * Derruba os sockets de um usuário. Chamado quando o admin desativa a conta ou
+ * mexe nas instâncias liberadas: sem isto a mudança só valeria no próximo
+ * reload da página da pessoa.
+ */
+export async function revalidarSocketsDoUsuario(io, userId) {
+  if (!io || !userId) return 0;
+  let afetados = 0;
+  for (const socket of await io.in(userRoom(userId)).fetchSockets()) {
+    afetados += 1;
+    try {
+      // fetchSockets devolve um handle remoto; o revalidar precisa do socket
+      // local, então nos casos simples (servidor único) ele está em io.sockets.
+      const local = io.sockets.sockets.get(socket.id);
+      if (!local) continue;
+      const segue = await revalidarSocket(local);
+      if (!segue) local.disconnect(true);
+    } catch (err) {
+      console.warn(`[socket] revalidar ${socket.id} falhou: ${err.message}`);
+    }
+  }
+  return afetados;
+}
+
 export function bindSocketHandlers(io) {
   io.use(socketAuth());
   io.on("connection", async socket => {
@@ -76,5 +104,17 @@ export function bindSocketHandlers(io) {
         socket.leave(roomFor(instanceId));
       }
     });
+
+    // Reconferência periódica: cobre a revogação feita fora deste processo e o
+    // caso de a chamada dirigida ter falhado.
+    const relogio = setInterval(async () => {
+      try {
+        if (!(await revalidarSocket(socket))) socket.disconnect(true);
+      } catch (err) {
+        console.warn(`[socket] revalidação periódica falhou: ${err.message}`);
+      }
+    }, REVALIDAR_A_CADA_MS);
+    relogio.unref?.();
+    socket.on("disconnect", () => clearInterval(relogio));
   });
 }

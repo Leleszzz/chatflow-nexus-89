@@ -1,8 +1,9 @@
-import { Router } from "express";
+import { Router } from "../lib/safe-router.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import mime from "mime-types";
 import { resolveMediaPath } from "../storage/media-repo.js";
+import { podeServirInline, contentTypeParaServir, nomeParaDownload } from "../lib/media-safety.js";
 
 export const mediaRouter = Router();
 
@@ -11,14 +12,38 @@ export const mediaRouter = Router();
 // A proteção é o nome de arquivo nanoid de 21 chars (URL-capability, ~126 bits)
 // + resolveMediaPath com path.basename contra traversal. Não "corrigir" isso
 // adicionando auth sem repensar o consumo no frontend.
+//
+// O que ESTA rota precisa garantir, e não garantia antes: o navegador nunca
+// EXECUTAR o que está guardado. Como a rota é pública e roda na origem que tem
+// o cookie de sessão, servir um .html com Content-Type text/html transformava
+// um anexo de WhatsApp em roubo da sessão do atendente. Agora só a allowlist é
+// servida inline; o resto sai como download, e nada é adivinhado por sniffing.
 mediaRouter.get("/:filename", async (req, res) => {
-  const filePath = resolveMediaPath(req.params.filename);
+  let filePath;
+  try {
+    filePath = resolveMediaPath(req.params.filename);
+  } catch {
+    return res.status(400).json({ error: "nome de arquivo inválido" });
+  }
   try {
     const stat = await fsp.stat(filePath);
     if (!stat.isFile()) return res.status(404).end();
-    const contentType = mime.lookup(filePath) || "application/octet-stream";
+    const detectado = mime.lookup(filePath) || "application/octet-stream";
     const total = stat.size;
-    res.setHeader("Content-Type", contentType);
+
+    // Nunca deixar o navegador adivinhar o tipo: sem isto, o Content-Type
+    // defensivo abaixo seria ignorado pelo sniffing do próprio navegador.
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Type", contentTypeParaServir(detectado));
+    if (!podeServirInline(detectado)) {
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${nomeParaDownload(req.params.filename)}"`,
+      );
+    }
+    // Defesa em profundidade: mesmo que algo escape da allowlist, a CSP impede
+    // script de rodar e o sandbox tira o acesso à mesma origem.
+    res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
     res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
     // Permite que o browser faça seek em áudio/vídeo via requisições parciais.
     res.setHeader("Accept-Ranges", "bytes");

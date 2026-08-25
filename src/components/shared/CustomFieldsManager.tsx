@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { mensagemDeErro } from "@/lib/erros";
 
 const TIPOS: { id: CustomFieldType; label: string; hint: string }[] = [
   { id: "texto", label: "Texto", hint: "Qualquer texto livre" },
@@ -45,7 +46,7 @@ export function CustomFieldsManager() {
       setType("texto");
       toast.success(`Campo criado com a chave ${criado.key}`);
     } catch (err) {
-      toast.error(`Falha ao criar: ${(err as Error).message}`);
+      toast.error(`Falha ao criar: ${mensagemDeErro(err)}`);
     } finally {
       setSalvando(false);
     }
@@ -56,7 +57,7 @@ export function CustomFieldsManager() {
       await whatsappApi.updateCustomField(field.id, mudanca);
       await refreshCustomFields();
     } catch (err) {
-      toast.error(`Falha ao salvar: ${(err as Error).message}`);
+      toast.error(`Falha ao salvar: ${mensagemDeErro(err)}`);
       await refreshCustomFields();
     }
   };
@@ -74,7 +75,7 @@ export function CustomFieldsManager() {
       await refreshCustomFields();
       toast.success("Campo removido");
     } catch (err) {
-      toast.error(`Falha ao remover: ${(err as Error).message}`);
+      toast.error(`Falha ao remover: ${mensagemDeErro(err)}`);
     }
   };
 

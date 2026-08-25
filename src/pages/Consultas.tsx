@@ -35,6 +35,7 @@ import { clearSession, listSessions, loadSession, pruneOldSessions, RecordingSes
 import { useCRM } from "@/store/crm-store";
 import { whatsappApi, Consultation, TranscriptionStatus, WAConversation } from "@/lib/whatsapp-api";
 import { cn } from "@/lib/utils";
+import { mensagemDeErro } from "@/lib/erros";
 
 const initials = (name: string) =>
   name.split(" ").filter(Boolean).slice(0, 2).map(p => p[0]?.toUpperCase()).join("") || "?";
@@ -251,7 +252,7 @@ export default function Consultas() {
       await refreshConsultations();
       toast.success("Consulta enviada — a transcrição aparece aqui assim que ficar pronta");
     } catch (err) {
-      toast.error(`Falha ao enviar: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Falha ao enviar: ${mensagemDeErro(err)}`);
     } finally {
       setEnviando(false);
       setProgresso(0);
@@ -270,7 +271,7 @@ export default function Consultas() {
       await whatsappApi.retryConsultation(consultation.id);
       toast.success("Reprocessando a transcrição…");
     } catch (err) {
-      toast.error(`Falha ao reprocessar: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Falha ao reprocessar: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -280,7 +281,7 @@ export default function Consultas() {
       await whatsappApi.generateConsultationSummary(consultation.id);
       toast.success("Resumo clínico gerado");
     } catch (err) {
-      toast.error(`Falha ao gerar o resumo: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Falha ao gerar o resumo: ${mensagemDeErro(err)}`);
     } finally {
       setGerandoResumo(false);
     }
@@ -294,7 +295,7 @@ export default function Consultas() {
       setEditando(false);
       toast.success("Transcrição corrigida");
     } catch (err) {
-      toast.error(`Falha ao salvar: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Falha ao salvar: ${mensagemDeErro(err)}`);
     } finally {
       setSalvandoTexto(false);
     }
@@ -307,7 +308,7 @@ export default function Consultas() {
       if (selecionadaId === consultation.id) setSelecionadaId(null);
       toast.success("Consulta excluída");
     } catch (err) {
-      toast.error(`Falha ao excluir: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Falha ao excluir: ${mensagemDeErro(err)}`);
     }
   };
 

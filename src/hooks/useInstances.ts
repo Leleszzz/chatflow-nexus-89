@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { whatsappApi, WhatsAppInstance, InstanceStatus, HistorySyncMode } from "@/lib/whatsapp-api";
 import { getSocket } from "@/lib/whatsapp-socket";
+import { mensagemDeErro } from "@/lib/erros";
 
 export function useInstances() {
   const [instances, setInstances] = useState<WhatsAppInstance[]>([]);
@@ -16,7 +17,7 @@ export function useInstances() {
       const data = await whatsappApi.listInstances();
       setInstances(data);
     } catch (err) {
-      setError((err as Error).message);
+      setError(mensagemDeErro(err));
     } finally {
       setLoading(false);
     }

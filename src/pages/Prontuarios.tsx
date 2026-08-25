@@ -38,6 +38,7 @@ import { useCRM } from "@/store/crm-store";
 import { Deal } from "@/lib/mock-data";
 import { ProntuarioAttachment, ProntuarioCategory } from "@/lib/whatsapp-api";
 import { cn } from "@/lib/utils";
+import { mensagemDeErro } from "@/lib/erros";
 
 const initials = (name: string) =>
   name
@@ -188,7 +189,7 @@ export default function Prontuarios() {
         setPendingName("");
       }
     } catch (err) {
-      toast.error(`Falha ao enviar: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Falha ao enviar: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -209,7 +210,7 @@ export default function Prontuarios() {
       toast.success("Nome atualizado");
       setRenameTarget(null);
     } catch (err) {
-      toast.error(`Falha ao renomear: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Falha ao renomear: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -219,7 +220,7 @@ export default function Prontuarios() {
       await removeProntuario(attachment.id);
       toast.success("Arquivo removido");
     } catch (err) {
-      toast.error(`Falha ao excluir: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Falha ao excluir: ${mensagemDeErro(err)}`);
     }
   };
 

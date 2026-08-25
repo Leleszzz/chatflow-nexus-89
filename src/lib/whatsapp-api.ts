@@ -309,17 +309,55 @@ export type UserRecord = {
 // mais token em JavaScript — nem para ler, nem para guardar.
 const withCredentials: RequestInit = { credentials: "include" };
 
+// Par do double-submit contra CSRF. O cookie `crm_csrf` NÃO é httpOnly de
+// propósito: só o JavaScript desta origem consegue lê-lo e devolver o valor no
+// header. Um site atacante faz o navegador ENVIAR o cookie de sessão, mas não
+// consegue LER este aqui — então não sabe o que pôr no header, e o backend
+// recusa. Sem isso, a única defesa era SameSite=Lax, que deixa de valer quando
+// front e API ficam em origens diferentes.
+const CSRF_COOKIE = "crm_csrf";
+
+function lerCookieCsrf(): string | null {
+  if (typeof document === "undefined") return null;
+  for (const parte of document.cookie.split(";")) {
+    const [nome, ...resto] = parte.trim().split("=");
+    if (nome === CSRF_COOKIE) return decodeURIComponent(resto.join("="));
+  }
+  return null;
+}
+
+/** Cabeçalhos de autenticação para qualquer requisição que mude estado. */
+export function cabecalhosCsrf(): Record<string, string> {
+  const token = lerCookieCsrf();
+  return token ? { "X-CSRF-Token": token } : {};
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = { "Content-Type": "application/json", ...(init?.headers as Record<string, string> || {}) };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...cabecalhosCsrf(),
+    ...(init?.headers as Record<string, string> || {}),
+  };
   const res = await fetch(path, { ...withCredentials, ...init, headers });
   if (!res.ok) {
     const text = await res.text();
-    let detail = text;
+    // Preserva o corpo estruturado ({ error, code, ref }) na mensagem: é o que
+    // permite a src/lib/erros.ts traduzir o código para uma frase acionável em
+    // vez de exibir "erro interno" e deixar o usuário sem próximo passo.
     try {
       const parsed = JSON.parse(text);
-      if (parsed?.error) detail = parsed.error;
-    } catch {}
-    throw new Error(detail || `${res.status} ${res.statusText}`);
+      if (parsed && typeof parsed === "object" && (parsed.error || parsed.code)) {
+        throw new Error(JSON.stringify({
+          error: parsed.error,
+          code: parsed.code,
+          ref: parsed.ref,
+          status: res.status,
+        }));
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith("{")) throw e;
+    }
+    throw new Error(text || `${res.status} ${res.statusText}`);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -352,10 +390,28 @@ export const whatsappApi = {
   deleteInstance: (id: string) =>
     request<{ ok: true }>(`/api/instances/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
-  listConversations: (instanceId?: string) => {
-    const qs = instanceId ? `?instanceId=${encodeURIComponent(instanceId)}` : "";
+  /**
+   * Lista conversas. `busca` vai para o SERVIDOR: com a listagem paginada,
+   * filtrar no cliente só encontraria o que coube na página carregada, e o
+   * atendente concluiria que o contato não existe.
+   */
+  listConversations: (opts?: { instanceId?: string; busca?: string; limit?: number; offset?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.instanceId) params.set("instanceId", opts.instanceId);
+    if (opts?.busca) params.set("q", opts.busca);
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.offset) params.set("offset", String(opts.offset));
+    const qs = params.toString() ? `?${params.toString()}` : "";
     return request<WAConversation[]>(`/api/conversations${qs}`);
   },
+  /**
+   * Só o overlay de CRM (dono, etapa, tags, IA) de cada conversa visível.
+   * Substitui o download da lista inteira que o store fazia só para reindexar
+   * este pedaço — desperdício que virou perda de dado quando a lista foi paginada.
+   */
+  listCrmOverlays: () =>
+    request<Array<{ id: string; crm: CrmPatch }>>("/api/conversations/crm-overlays"),
+
   /** Conversas arquivadas (soft delete). Só admin consegue arquivar/restaurar. */
   listArchivedConversations: () =>
     request<WAConversation[]>("/api/conversations?archived=true"),
@@ -456,7 +512,7 @@ export const whatsappApi = {
     form.append("chatId", chatId);
     form.append("type", "text");
     form.append("body", body);
-    const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/send`, { ...withCredentials, method: "POST", body: form });
+    const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/send`, { ...withCredentials, method: "POST", headers: cabecalhosCsrf(), body: form });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     return res.json() as Promise<{ ok: true; messageId: string | null; timestamp: number }>;
   },
@@ -466,7 +522,7 @@ export const whatsappApi = {
     form.append("type", type);
     form.append("body", caption);
     form.append("file", file);
-    const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/send`, { ...withCredentials, method: "POST", body: form });
+    const res = await fetch(`/api/instances/${encodeURIComponent(instanceId)}/send`, { ...withCredentials, method: "POST", headers: cabecalhosCsrf(), body: form });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     return res.json() as Promise<{ ok: true; messageId: string | null; timestamp: number }>;
   },
@@ -581,6 +637,7 @@ export const whatsappApi = {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", "/api/consultations/upload");
       xhr.withCredentials = true;
+      for (const [nome, valor] of Object.entries(cabecalhosCsrf())) xhr.setRequestHeader(nome, valor);
       xhr.upload.onprogress = e => {
         if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
       };
@@ -641,7 +698,7 @@ export const whatsappApi = {
   importLeadList: async (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    const res = await fetch("/api/leads/import", { ...withCredentials, method: "POST", body: form });
+    const res = await fetch("/api/leads/import", { ...withCredentials, method: "POST", headers: cabecalhosCsrf(), body: form });
     if (!res.ok) {
       const text = await res.text();
       let detail = text;
@@ -657,7 +714,7 @@ export const whatsappApi = {
     form.append("name", name);
     if (uploadedBy) form.append("uploadedBy", uploadedBy);
     form.append("file", file);
-    const res = await fetch("/api/prontuarios/upload", { ...withCredentials, method: "POST", body: form });
+    const res = await fetch("/api/prontuarios/upload", { ...withCredentials, method: "POST", headers: cabecalhosCsrf(), body: form });
     if (!res.ok) {
       const text = await res.text();
       let detail = text;

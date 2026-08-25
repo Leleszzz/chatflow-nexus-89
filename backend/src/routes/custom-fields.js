@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router } from "../lib/safe-router.js";
 import { requireAuth } from "../middleware/require-auth.js";
 import {
   FIELD_TYPES,

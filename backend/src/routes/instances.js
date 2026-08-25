@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router } from "../lib/safe-router.js";
 import { nanoid } from "nanoid";
 import { listInstances, getInstance, upsertInstance, patchInstance } from "../storage/instances-repo.js";
 import { connectionManager } from "../whatsapp/ConnectionManager.js";
@@ -8,6 +8,7 @@ import { requireAuth } from "../middleware/require-auth.js";
 import { requireInstanceAccess } from "../middleware/instance-access.js";
 import { canUserSeeInstance } from "../lib/instance-permissions.js";
 import { getSanitizedUser } from "../storage/users-repo.js";
+import { registrarAsync, ACOES } from "../lib/auditoria.js";
 
 export const instancesRouter = Router();
 
@@ -101,10 +102,17 @@ instancesRouter.patch("/:id", requireAuth({ admin: true }), async (req, res) => 
   res.json(updated);
 });
 
-instancesRouter.get("/:id/qr", requireInstanceAccess(), async (req, res) => {
+// `manage: true`, e não só leitura: quem consegue o QR consegue PAREAR O
+// PRÓPRIO CELULAR nesta conta de WhatsApp. Um usuário que recebeu acesso de
+// leitura à instância de outra pessoa (users.allowedInstanceIds) podia assumir
+// a conta dela por inteiro. O POST /pairing-code logo abaixo já exigia isto —
+// os dois GET tinham ficado para trás.
+instancesRouter.get("/:id/qr", requireInstanceAccess({ manage: true }), async (req, res) => {
   const client = connectionManager.get(req.params.id);
   const qr = client?.getQrDataUrl?.() || null;
   if (!qr) return res.status(404).json({ error: "QR indisponível" });
+  // Quem pega o QR pode parear um aparelho nesta conta: fica registrado.
+  registrarAsync(req, ACOES.PAREAR_INSTANCIA, { instanceId: req.params.id, via: "qr" });
   res.json({ qr });
 });
 
@@ -125,7 +133,7 @@ instancesRouter.post("/:id/pairing-code", requireInstanceAccess({ manage: true }
   }
 });
 
-instancesRouter.get("/:id/pairing-code", requireInstanceAccess(), async (req, res) => {
+instancesRouter.get("/:id/pairing-code", requireInstanceAccess({ manage: true }), async (req, res) => {
   const client = connectionManager.get(req.params.id);
   const code = client?.getPairingCode?.() || null;
   if (!code) return res.status(404).json({ error: "código indisponível" });

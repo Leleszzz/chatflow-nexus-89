@@ -1,36 +1,60 @@
 // Proteção contra o agente responder duas vezes a mesma conversa.
 //
-// O gatilho da resposta automática mora no NAVEGADOR (useAgentAutoReply): ele
-// escuta message:new e chama POST /api/agents/respond, que é quem de fato envia
-// a mensagem no WhatsApp. As travas do hook (inFlight/processed/debounce) são
-// estado em memória DE CADA ABA — duas abas abertas, ou um reload no meio do
-// debounce, disparam dois /respond para a mesma conversa e o cliente recebe
-// duas respostas. A trava precisa estar no backend, o único ponto comum.
-//
 // São duas situações distintas, e cada uma precisa da sua trava:
 //   1. concorrente  — as duas chamadas se sobrepõem no tempo  -> lock
 //   2. sequencial   — a segunda começa depois da primeira terminar -> histórico
+//
+// O lock vivia num Set em memória, com o comentário "o backend é único, então
+// isto basta". Isso amarrava o sistema a um único processo para sempre: subir
+// uma segunda instância — ou um `pm2 cluster`, que é o jeito normal de
+// aguentar mais carga — faria o cliente receber a resposta do agente
+// duplicada, porque cada processo teria o seu próprio Set.
+//
+// Agora a trava é um documento no Mongo com _id determinístico e expiração
+// automática. O `insertOne` é atômico: quem perder a corrida recebe erro de
+// chave duplicada e desiste, valha isso entre duas abas ou entre dois
+// servidores.
 
-// Conversas com resposta sendo gerada agora ("instanceId::chatId").
-// Vive no processo: o backend é único, então isto basta.
-const respondLocks = new Set();
+import { getCol, collections } from "../storage/mongo.js";
+
+// Se o processo morrer no meio de uma geração, o TTL do Mongo solta a conversa
+// sozinho. Sem isso, a conversa ficaria travada para sempre.
+const TTL_SEGUNDOS = Number(process.env.AGENT_LOCK_TTL_S || 120);
+
+const col = () => getCol(collections.agentLocks);
 
 export const respondLockKey = (instanceId, chatId) => `${instanceId}::${chatId}`;
 
 /** Tenta reservar a conversa. `false` = já existe uma resposta em andamento. */
-export function acquireRespondLock(key) {
-  if (respondLocks.has(key)) return false;
-  respondLocks.add(key);
-  return true;
+export async function acquireRespondLock(key) {
+  try {
+    await col().insertOne({ _id: key, em: new Date() });
+    return true;
+  } catch (err) {
+    if (err?.code === 11000) return false; // outra aba/processo chegou primeiro
+    // Banco indisponível não pode impedir o atendimento: segue sem a trava.
+    console.warn(`[agent-dedupe] trava indisponível (${err.message}); seguindo sem ela`);
+    return true;
+  }
 }
 
-export function releaseRespondLock(key) {
-  respondLocks.delete(key);
+export async function releaseRespondLock(key) {
+  try {
+    await col().deleteOne({ _id: key });
+  } catch (err) {
+    // O TTL solta sozinho; não vale derrubar nada por causa disto.
+    console.warn(`[agent-dedupe] liberar trava falhou: ${err.message}`);
+  }
 }
 
-/** Só para teste — o estado é global ao processo. */
-export function _resetRespondLocks() {
-  respondLocks.clear();
+/** Índice de expiração. Chamado uma vez no boot, junto dos outros. */
+export async function ensureAgentLockIndex() {
+  await col().createIndex({ em: 1 }, { expireAfterSeconds: TTL_SEGUNDOS });
+}
+
+/** Só para teste. */
+export async function _resetRespondLocks() {
+  try { await col().deleteMany({}); } catch { /* banco pode não estar de pé */ }
 }
 
 /**

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { useCRM, CrmPatch } from "@/store/crm-store";
@@ -29,6 +29,7 @@ import { ImageViewer } from "@/components/chat/ImageViewer";
 import { RecordingWaveform } from "@/components/chat/RecordingWaveform";
 import { SchedulingProposalBar } from "@/components/chat/SchedulingProposalBar";
 import { isAtendente } from "@/lib/roles";
+import { mensagemDeErro } from "@/lib/erros";
 
 type Conversation = {
   id: string;
@@ -205,13 +206,26 @@ const formatDaySeparator = (d: Date) => {
 
 export default function Conversas() {
   const { deals, addDeal, updateDeal, currentUser, isAdmin, teamUsers, tags, addTag, stages, agents, hasPermission, conversationPatches: waPatches, setConversationPatch, clearSchedulingProposal, appointments, addAppointment, linkMessageToProntuario } = useCRM();
-  const { conversations: waConversations, markRead, refresh: refreshConversations } = useWhatsAppConversations();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const initialDealId = searchParams.get("deal");
   const query = searchParams.get("q")?.toLowerCase().trim() || "";
   const statusQuery = searchParams.get("status") || "todas";
   const [conversationSearch, setConversationSearch] = useState(query);
+  // Valor adiado: o campo responde a digitacao na hora, mas a consulta ao
+  // servidor (e a filtragem pesada) so roda quando o React tem folga.
+  const buscaServidor = useDeferredValue(conversationSearch);
+
+  // A busca vai para o SERVIDOR. Filtrar no cliente só encontraria o que coube
+  // na página carregada, e o atendente concluiria que o contato não existe.
+  const {
+    conversations: waConversations,
+    markRead,
+    refresh: refreshConversations,
+    carregarMais: carregarMaisConversas,
+    carregandoMais: carregandoMaisConversas,
+    temMais: temMaisConversas,
+  } = useWhatsAppConversations(buscaServidor);
   const [statusFilter, setStatusFilter] = useState(statusQuery);
   // "recentes" = última interação mais nova primeiro (padrão, como no WhatsApp).
   const [sortOrder, setSortOrder] = useState<"recentes" | "antigas">("recentes");
@@ -241,6 +255,10 @@ export default function Conversas() {
   const [selectionToolbar, setSelectionToolbar] = useState<{ top: number; left: number } | null>(null);
   const attachInputRef = useRef<HTMLInputElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  // Altura da lista logo antes de receber mensagens antigas no topo. Serve
+  // para devolver a posição depois do prepend e, junto disso, para o efeito
+  // de "rolar até o fim" saber que NÃO é uma mensagem nova chegando.
+  const alturaAntesDeCarregar = useRef<number | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStartRef = useRef<number>(0);
   const recordingTimerRef = useRef<number | null>(null);
@@ -323,14 +341,23 @@ export default function Conversas() {
     }),
     [waConversations, waPatches, deals, dealByPhone, duplicatedChatIds, instanceNameById],
   );
-  const conversations = inboxConversations
-    .filter(conversation =>
-      isAdmin ||
-      conversation.sellerId === currentUser?.id ||
-      conversation.assignedSellerIds?.includes(currentUser?.id || "") ||
-      conversation.tags.some(tag => currentUser?.allowedTags?.includes(tag))
-    )
-    .sort((a, b) => tsValue(b.lastInteraction) - tsValue(a.lastInteraction));
+  // Toda esta cadeia rodava SOLTA no corpo do componente: `conversations`,
+  // `scopedConversations`, `stageCounts`, `statusCounts` e `visibleConversations`
+  // eram recalculadas do zero a cada render — inclusive a cada TECLA digitada na
+  // busca. São cinco varreduras completas da lista, e o loop de `statusCounts` é
+  // O(n x filtros). Com alguns milhares de conversas, digitar travava a tela.
+  const conversations = useMemo(
+    () => inboxConversations
+      .filter(conversation =>
+        isAdmin ||
+        conversation.sellerId === currentUser?.id ||
+        conversation.assignedSellerIds?.includes(currentUser?.id || "") ||
+        conversation.tags.some(tag => currentUser?.allowedTags?.includes(tag))
+      )
+      .sort((a, b) => tsValue(b.lastInteraction) - tsValue(a.lastInteraction)),
+    [inboxConversations, isAdmin, currentUser?.id, currentUser?.allowedTags],
+  );
+
   const initialSelectedId = initialDealId
     ? conversations.find(conversation => conversation.dealId === initialDealId)?.id || conversations[0]?.id
     : conversations[0]?.id;
@@ -339,17 +366,24 @@ export default function Conversas() {
   // Quantas conversas caem em cada etapa. Vai no próprio filtro: assim dá para
   // ver antes de marcar que uma etapa está vazia, em vez de marcar e encarar
   // uma lista em branco sem saber por quê.
-  const stageCounts = new Map<string, number>();
-  for (const conversation of conversations) {
-    const key = conversation.stage || SEM_ETAPA;
-    stageCounts.set(key, (stageCounts.get(key) || 0) + 1);
-  }
+  const stageCounts = useMemo(() => {
+    const contagem = new Map<string, number>();
+    for (const conversation of conversations) {
+      const key = conversation.stage || SEM_ETAPA;
+      contagem.set(key, (contagem.get(key) || 0) + 1);
+    }
+    return contagem;
+  }, [conversations]);
 
-  const activeSearch = conversationSearch.toLowerCase().trim();
+  // O servidor ja filtrou por este mesmo termo; o filtro local que sobra serve
+  // para refinar dentro do que esta carregado (tags, nome do responsavel) sem
+  // ida extra a rede.
+  const activeSearch = buscaServidor.toLowerCase().trim();
+
   // Tudo o que passa pela busca e pelos filtros de recorte (etapa, instância,
   // responsável), mas ainda sem o filtro de status. É a base dos contadores dos
   // chips: cada chip mostra quantas conversas cairiam nele.
-  const scopedConversations = (activeSearch
+  const scopedConversations = useMemo(() => (activeSearch
     ? conversations.filter(conversation =>
       conversation.customer.toLowerCase().includes(activeSearch) ||
       conversation.phone.toLowerCase().includes(activeSearch) ||
@@ -365,25 +399,32 @@ export default function Conversas() {
     // Instância e responsável: filtros exclusivos do admin. Vazio = todos.
     .filter(conversation => instanceFilter.size === 0 || (conversation.instanceId ? instanceFilter.has(conversation.instanceId) : false))
     .filter(conversation => sellerFilter.size === 0
-      || [conversation.sellerId, ...(conversation.assignedSellerIds || [])].some(id => id && sellerFilter.has(id)));
+      || [conversation.sellerId, ...(conversation.assignedSellerIds || [])].some(id => id && sellerFilter.has(id))),
+    [conversations, activeSearch, sellerOptions, stageFilter, instanceFilter, sellerFilter]);
 
   // Uma passada só pela lista, distribuindo cada conversa nos chips que casam —
   // evita varrer `scopedConversations` uma vez por filtro.
-  const statusCounts: Record<string, number> = {};
-  for (const filter of statusFilters) statusCounts[filter.id] = 0;
-  for (const conversation of scopedConversations) {
-    for (const filter of statusFilters) {
-      if (matchesStatusFilter(conversation, filter.id, currentUser?.id || "")) statusCounts[filter.id] += 1;
+  const statusCounts = useMemo(() => {
+    const contagem: Record<string, number> = {};
+    for (const filter of statusFilters) contagem[filter.id] = 0;
+    for (const conversation of scopedConversations) {
+      for (const filter of statusFilters) {
+        if (matchesStatusFilter(conversation, filter.id, currentUser?.id || "")) contagem[filter.id] += 1;
+      }
     }
-  }
+    return contagem;
+  }, [scopedConversations, currentUser?.id]);
 
-  const visibleConversations = scopedConversations
+  const visibleConversations = useMemo(() => scopedConversations
     .filter(conversation => matchesStatusFilter(conversation, statusFilter, currentUser?.id || ""))
     // Ordena só a lista exibida — `conversations` continua na ordem padrão, para
     // a conversa selecionada não pular ao inverter a ordenação.
+    .slice()
     .sort((a, b) => (sortOrder === "recentes"
       ? tsValue(b.lastInteraction) - tsValue(a.lastInteraction)
-      : tsValue(a.lastInteraction) - tsValue(b.lastInteraction)));
+      : tsValue(a.lastInteraction) - tsValue(b.lastInteraction))),
+    [scopedConversations, statusFilter, currentUser?.id, sortOrder]);
+
   const selected = conversations.find(conversation => conversation.id === selectedId) || visibleConversations[0];
   const selectedDeal = selected?.dealId ? deals.find(deal => deal.id === selected.dealId) : null;
   const isWaConversation = Boolean(selected?.instanceId && selected?.chatId);
@@ -392,7 +433,12 @@ export default function Conversas() {
   const canEditLeadName = isAdmin || hasPermission("Editar atendimentos");
   const selectedStatus = selected ? conversationStatus(selected) : null;
 
-  const { messages: waMessages } = useWhatsAppMessages(isWaConversation ? selected?.id : null);
+  const {
+    messages: waMessages,
+    carregarAntigas,
+    carregandoAntigas,
+    temMaisAntigas,
+  } = useWhatsAppMessages(isWaConversation ? selected?.id : null);
 
   // Mensagens fatiadas por dia. Cada fatia vira uma <section> com o próprio
   // separador sticky: sticky IRMÃOS dentro do mesmo container param todos na
@@ -477,6 +523,10 @@ export default function Conversas() {
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
+    // Carregar histórico ANTIGO também muda o tamanho da lista. Sem este guard,
+    // o usuário rolava para cima, a página anterior chegava e a tela pulava de
+    // volta para o fim — tornando o histórico impossível de ler.
+    if (alturaAntesDeCarregar.current !== null) return;
     el.scrollTop = el.scrollHeight;
   }, [selected?.id, waMessages.length]);
 
@@ -502,6 +552,30 @@ export default function Conversas() {
       el.scrollTop = listScrollRef.current;
     }
   }, [visibleConversations]);
+
+  // --- Histórico: rolagem infinita para cima ---
+  // A conversa carregava 100 mensagens e ponto: o começo de qualquer
+  // atendimento mais longo era INALCANÇÁVEL pela interface, mesmo com a API já
+  // aceitando `before`. Ao chegar perto do topo, busca a página anterior.
+  const aoRolarMensagens = () => {
+    const el = messagesContainerRef.current;
+    if (!el || carregandoAntigas || !temMaisAntigas) return;
+    if (el.scrollTop < 120) {
+      // Guarda a altura para devolver a posição depois que as mensagens
+      // antigas entrarem — senão a lista "pula" sob o dedo do usuário.
+      alturaAntesDeCarregar.current = el.scrollHeight;
+      void carregarAntigas();
+    }
+  };
+
+  useLayoutEffect(() => {
+    const el = messagesContainerRef.current;
+    const antes = alturaAntesDeCarregar.current;
+    if (!el || antes === null) return;
+    alturaAntesDeCarregar.current = null;
+    // Mantém sob o cursor a mesma mensagem que estava antes do prepend.
+    el.scrollTop = el.scrollHeight - antes;
+  }, [waMessages]);
 
   // Arquivar é soft delete: some da lista mas o histórico continua no banco e a
   // conversa pode ser restaurada. Se o contato mandar mensagem nova, o backend
@@ -595,7 +669,7 @@ export default function Conversas() {
         await whatsappApi.updateConversation(selected.id, { customer });
         toast.success("Nome do lead atualizado");
       } catch (err) {
-        toast.error(`Não foi possível salvar: ${(err as Error).message}`);
+        toast.error(`Não foi possível salvar: ${mensagemDeErro(err)}`);
       }
     } else {
       toast.success("Nome do lead atualizado");
@@ -706,7 +780,7 @@ export default function Conversas() {
         },
       });
     } catch (err) {
-      toast.error(`Falha: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Falha: ${mensagemDeErro(err)}`);
     } finally {
       setLinkingProntuario(false);
     }
@@ -781,7 +855,7 @@ export default function Conversas() {
       setNewConversationName("");
       toast.success("Conversa pronta para atendimento");
     } catch (err) {
-      toast.error(`Não foi possível iniciar: ${(err as Error).message}`);
+      toast.error(`Não foi possível iniciar: ${mensagemDeErro(err)}`);
     } finally {
       setStartingConversation(false);
     }
@@ -826,7 +900,7 @@ export default function Conversas() {
       await whatsappApi.sendText(selected.instanceId, selected.chatId, body);
       setDraftMessage("");
     } catch (err) {
-      toast.error(`Falha ao enviar: ${(err as Error).message}`);
+      toast.error(`Falha ao enviar: ${mensagemDeErro(err)}`);
     } finally {
       setSending(false);
       setSelectionToolbar(null);
@@ -932,7 +1006,7 @@ export default function Conversas() {
       await whatsappApi.sendText(selected.instanceId, selected.chatId, text);
       toast.success("Lista de dias enviada ao cliente.");
     } catch (err) {
-      toast.error(`Falha ao enviar: ${(err as Error).message}`);
+      toast.error(`Falha ao enviar: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -950,7 +1024,7 @@ export default function Conversas() {
       await whatsappApi.sendText(selected.instanceId, selected.chatId, text);
       toast.success("Lista de horários enviada ao cliente.");
     } catch (err) {
-      toast.error(`Falha ao enviar: ${(err as Error).message}`);
+      toast.error(`Falha ao enviar: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -988,7 +1062,7 @@ export default function Conversas() {
       try {
         await whatsappApi.sendText(selected.instanceId, selected.chatId, confirmText);
       } catch (err) {
-        toast.error(`Agendamento criado, mas falha ao enviar confirmação: ${(err as Error).message}`);
+        toast.error(`Agendamento criado, mas falha ao enviar confirmação: ${mensagemDeErro(err)}`);
         return;
       }
     }
@@ -1009,7 +1083,7 @@ export default function Conversas() {
         document: "Documento enviado",
       }[kind]);
     } catch (err) {
-      toast.error(`Falha: ${(err as Error).message}`);
+      toast.error(`Falha: ${mensagemDeErro(err)}`);
     } finally {
       setSending(false);
     }
@@ -1055,7 +1129,7 @@ export default function Conversas() {
       }, 250);
       recorder.start();
     } catch (err) {
-      toast.error(`Não foi possível acessar o microfone: ${(err as Error).message}`);
+      toast.error(`Não foi possível acessar o microfone: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -1074,7 +1148,7 @@ export default function Conversas() {
       const list = await whatsappApi.listScheduledMessages({ conversationId });
       setScheduledList(list);
     } catch (err) {
-      toast.error(`Falha ao carregar agendamentos: ${(err as Error).message}`);
+      toast.error(`Falha ao carregar agendamentos: ${mensagemDeErro(err)}`);
     } finally {
       setLoadingScheduled(false);
     }
@@ -1121,7 +1195,7 @@ export default function Conversas() {
       setSchedBody("");
       toast.success("Mensagem agendada com sucesso.");
     } catch (err) {
-      toast.error(`Não foi possível agendar: ${(err as Error).message}`);
+      toast.error(`Não foi possível agendar: ${mensagemDeErro(err)}`);
     } finally {
       setSavingSchedule(false);
     }
@@ -1139,7 +1213,7 @@ export default function Conversas() {
         toast.success("Agendamento cancelado.");
       }
     } catch (err) {
-      toast.error(`Falha: ${(err as Error).message}`);
+      toast.error(`Falha: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -1371,12 +1445,31 @@ export default function Conversas() {
             onScroll={event => { listScrollRef.current = event.currentTarget.scrollTop; }}
             className="flex-1 overflow-y-auto scrollbar-thin"
           >
+            {temMaisConversas && !activeSearch && (
+              <div className="p-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  disabled={carregandoMaisConversas}
+                  onClick={() => void carregarMaisConversas()}
+                >
+                  {carregandoMaisConversas ? "Carregando…" : "Carregar mais conversas"}
+                </Button>
+              </div>
+            )}
             {visibleConversations.map(conversation => {
               const responsible = sellerOptions.find(user => user.id === conversation.sellerId);
               return (
                 <button
                   key={conversation.id}
                   onClick={() => setSelectedId(conversation.id)}
+                  // `content-visibility: auto` pula layout e pintura das linhas fora
+                  // da tela: o efeito prático da virtualização, sem trocar a
+                  // estrutura do DOM (o que quebraria a restauração de rolagem
+                  // já implementada acima). `contain-intrinsic-size` reserva a
+                  // altura estimada para a barra de rolagem não pular.
+                  style={{ contentVisibility: "auto", containIntrinsicSize: "auto 76px" }}
                   className={cn("flex w-full items-start gap-3 border-b border-border/40 p-3 text-left transition-colors hover:bg-secondary/50",
                     selected?.id === conversation.id && "bg-primary-soft hover:bg-primary-soft")}
                 >
@@ -1527,7 +1620,21 @@ export default function Conversas() {
                 </div>
               )}
 
-              <div className="flex-1 space-y-3 overflow-y-auto p-6" ref={messagesContainerRef}>
+              <div
+                className="flex-1 space-y-3 overflow-y-auto p-6"
+                ref={messagesContainerRef}
+                onScroll={aoRolarMensagens}
+              >
+                {isWaConversation && carregandoAntigas && (
+                  <div className="py-2 text-center text-xs text-muted-foreground">
+                    Carregando mensagens anteriores…
+                  </div>
+                )}
+                {isWaConversation && !carregandoAntigas && !temMaisAntigas && waMessages.length > 0 && (
+                  <div className="py-2 text-center text-[11px] text-muted-foreground/70">
+                    Começo da conversa
+                  </div>
+                )}
                 {isWaConversation ? (
                   waMessages.length === 0 ? (
                     <div className="mx-auto max-w-md rounded-xl bg-info-soft p-3 text-center text-xs text-info">

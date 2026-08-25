@@ -17,11 +17,14 @@ export default function Login() {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (await login(identifier, password)) {
+    const resultado = await login(identifier, password);
+    if (resultado.ok === true) {
       toast.success("Login realizado");
       return;
     }
-    toast.error("Usuário ou senha inválidos");
+    // Mostra o motivo real: bloqueio por tentativas demais é uma orientação
+    // diferente de senha errada, e tratar os dois igual faz o usuário insistir.
+    toast.error(resultado.motivo);
   };
 
   return (

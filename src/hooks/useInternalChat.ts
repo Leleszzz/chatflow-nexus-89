@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { whatsappApi, InternalMessage, InternalThread } from "@/lib/whatsapp-api";
 import { getSocket } from "@/lib/whatsapp-socket";
+import { mensagemDeErro } from "@/lib/erros";
 
 // O backend entrega os eventos na sala pessoal `user:<id>`, na qual o socket já
 // entra sozinho no connect — não é preciso dar join em nada aqui.
@@ -20,7 +21,7 @@ export function useInternalThreads(currentUserId: string | undefined) {
       setError(null);
       setThreads((await whatsappApi.listInternalThreads()).sort(byRecency));
     } catch (err) {
-      setError((err as Error).message);
+      setError(mensagemDeErro(err));
     } finally {
       setLoading(false);
     }

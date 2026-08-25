@@ -30,3 +30,9 @@ backend/node_modules
 backend/data
 backend/.env
 backend/.wwebjs_cache
+
+# Segredos — nunca commitar
+.env
+.env.*
+!.env.example
+backend/.env.bak-*

@@ -59,11 +59,41 @@ export const collections = {
   tags: "tags",
   appointments: "appointments",
   dealOutcomes: "deal_outcomes",
+  auditoria: "auditoria",
+  agentLocks: "agent_locks",
 };
 
 async function ensureIndexes() {
   await Promise.all([
     getCol(collections.conversations).createIndex({ instanceId: 1, lastInteraction: -1 }),
+    // A caixa de entrada sempre filtra por arquivadas + não-grupo e ordena por
+    // interação. Sem este composto, a listagem paginada volta a varrer a coleção.
+    getCol(collections.conversations).createIndex({ archivedAt: 1, isGroup: 1, lastInteraction: -1 }),
+    getCol(collections.conversations).createIndex({ instanceId: 1, archivedAt: 1, lastInteraction: -1 }),
+    // Vínculo conversa -> card (findConversationByDealId, clearCrmDealLink).
+    getCol(collections.conversations).createIndex({ "crm.dealId": 1 }),
+    // Distribuição de leads conta conversas por responsável.
+    getCol(collections.conversations).createIndex({ "crm.sellerId": 1, archivedAt: 1 }),
+    // Login e unicidade de identificador. `sparse` porque documento antigo pode
+    // não ter o campo; sem ele o índice único rejeitaria o segundo nulo.
+    getCol(collections.users).createIndex({ username: 1 }, { unique: true, sparse: true }),
+    getCol(collections.users).createIndex({ email: 1 }, { sparse: true }),
+    // leadStats ordena por data de importação a cada carregamento da tela.
+    getCol(collections.leadList).createIndex({ importadoEm: -1 }),
+    // Kanban e agenda ordenam/filtram por última interação.
+    getCol(collections.deals).createIndex({ lastInteraction: -1 }),
+    // Trilha de auditoria: consulta por usuario e por acao, com expiracao
+    // automatica em 2 anos para o log nao crescer sem fim.
+    getCol(collections.auditoria).createIndex({ em: -1 }),
+    getCol(collections.auditoria).createIndex({ usuarioId: 1, em: -1 }),
+    getCol(collections.auditoria).createIndex({ acao: 1, em: -1 }),
+    getCol(collections.auditoria).createIndex({ em: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 730 }),
+    // Trava do agente: expira sozinha se o processo morrer no meio de uma
+    // geracao, senao a conversa ficaria travada para sempre.
+    getCol(collections.agentLocks).createIndex(
+      { em: 1 },
+      { expireAfterSeconds: Number(process.env.AGENT_LOCK_TTL_S || 120) },
+    ),
     getCol(collections.messages).createIndex({ instanceId: 1, chatId: 1, timestamp: 1 }),
     getCol(collections.prontuarios).createIndex({ dealId: 1 }),
     // Consultas gravadas: a lista por cliente é sempre a mais recente primeiro,

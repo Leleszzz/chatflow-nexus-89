@@ -1,8 +1,14 @@
 import crypto from "node:crypto";
+import { config } from "../config.js";
 
-const JWT_SECRET = process.env.JWT_SECRET || "queijo";
 const JWT_ALGORITHM = "HS256";
 export const TOKEN_TTL_SECONDS = 60 * 60 * 8;
+
+// NÃO existe segredo padrão. O valor sai de config.js, que aborta o boot se a
+// variável JWT_SECRET faltar ou for fraca. O fallback que existia aqui ("queijo")
+// estava commitado no .env do repositório: qualquer pessoa com acesso ao git
+// forjava um cookie de administrador sem precisar de senha.
+const JWT_SECRET = config.jwtSecret;
 
 const base64UrlEncode = value => {
   const buffer = typeof value === "string" ? Buffer.from(value, "utf8") : Buffer.from(value);
@@ -34,9 +40,19 @@ export function verifyAuthToken(token) {
   if (signature.length !== expected.length) return null;
   if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
   try {
+    // O algoritmo é conferido explicitamente. A assinatura HMAC já é sempre
+    // recalculada (então "alg: none" nunca casaria), mas recusar um header que
+    // anuncia outra coisa mantém o token com um único formato válido.
+    const head = JSON.parse(base64UrlDecode(header));
+    if (!head || head.alg !== JWT_ALGORITHM) return null;
+
     const decoded = JSON.parse(base64UrlDecode(payload));
     if (!decoded || typeof decoded !== "object") return null;
-    if (decoded.exp && decoded.exp <= Math.floor(Date.now() / 1000)) return null;
+    // `exp` é OBRIGATÓRIO. Antes, `if (decoded.exp && ...)` deixava um token sem
+    // o campo valer para sempre.
+    if (typeof decoded.exp !== "number" || !Number.isFinite(decoded.exp)) return null;
+    if (decoded.exp <= Math.floor(Date.now() / 1000)) return null;
+    if (!decoded.sub) return null;
     return decoded;
   } catch {
     return null;

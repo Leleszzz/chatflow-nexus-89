@@ -4,11 +4,16 @@ import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { useCRM } from "@/store/crm-store";
 import { useLeadAutomation } from "@/hooks/useLeadAutomation";
-import { useAgentAutoReply } from "@/hooks/useAgentAutoReply";
+import { useAgentNotifications } from "@/hooks/useAgentNotifications";
 
 function LeadAutomationRunner() {
   useLeadAutomation();
-  useAgentAutoReply();
+  // Avisos do agente chegam por socket agora que ele roda no servidor.
+  useAgentNotifications();
+  // O gatilho automatico do agente de IA saiu daqui e foi para o BACKEND
+  // (backend/src/whatsapp/agent-auto-reply.js). Enquanto morava no navegador,
+  // o agente parava de responder quando todo mundo fechava o CRM — e com
+  // varias abas abertas disparava a mesma resposta varias vezes.
   return null;
 }
 

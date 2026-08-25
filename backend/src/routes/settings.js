@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router } from "../lib/safe-router.js";
 import {
   getOpenaiSettings,
   setOpenaiSettings,
@@ -17,6 +17,8 @@ import { getConversation, patchConversationCrm, countConversationsAssignedTo } f
 import { listUsers } from "../storage/users-repo.js";
 import { requireAuth } from "../middleware/require-auth.js";
 import { ROLES } from "../lib/roles.js";
+import { userCanUseInstance } from "../middleware/instance-access.js";
+import { registrarAsync, ACOES } from "../lib/auditoria.js";
 
 export const settingsRouter = Router();
 
@@ -51,6 +53,12 @@ settingsRouter.post("/lead-distribution/next-seller", requireAuth(), async (req,
 
   const conversa = await getConversation(conversationId);
   if (!conversa) return res.status(404).json({ error: "conversa não encontrada" });
+  // Sem isto, qualquer usuário atribuía responsável a uma conversa de instância
+  // que ele nem pode enxergar. 404 em vez de 403: quem não vê a instância não
+  // deve descobrir que a conversa existe.
+  if (!(await userCanUseInstance(req.user, conversa.instanceId))) {
+    return res.status(404).json({ error: "conversa não encontrada" });
+  }
   // Já tem dono: não reatribui (é o mesmo guard do cliente, agora confiável).
   if (conversa.crm?.sellerId) return res.json({ assigned: null, reason: "ja-atribuida" });
 
@@ -105,6 +113,7 @@ settingsRouter.put("/openai", requireAuth({ admin: true }), async (req, res) => 
   const patch = { apiKey };
   if (typeof req.body?.defaultModel === "string") patch.defaultModel = req.body.defaultModel.trim();
   await setOpenaiSettings(patch);
+  registrarAsync(req, ACOES.ALTERAR_CHAVE_API, { provedor: "openai" });
   res.json({ configured: true, defaultModel: patch.defaultModel || "" });
 });
 

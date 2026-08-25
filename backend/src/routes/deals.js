@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router } from "../lib/safe-router.js";
 import {
   listAllDeals,
   getDeal,
@@ -10,7 +10,7 @@ import { clearCrmDealLink } from "../storage/conversations-repo.js";
 import { deleteAppointmentsByDeal } from "../storage/appointments-repo.js";
 import { deleteOutcomesByDeal } from "../storage/deal-outcomes-repo.js";
 import { deleteConsultationsByDeal } from "../storage/consultations-repo.js";
-import { deleteProntuario } from "../storage/prontuarios-repo.js";
+import { deleteProntuario, deleteProntuariosByDeal } from "../storage/prontuarios-repo.js";
 import { canUserSeeDeal } from "../lib/deal-permissions.js";
 import { emitDealEvent } from "../socket/events.js";
 import { requireAuth } from "../middleware/require-auth.js";
@@ -91,12 +91,17 @@ dealsRouter.delete("/:id", requireAuth(), async (req, res) => {
       clearCrmDealLink(req.params.id),
       deleteConsultationsByDeal(req.params.id),
     ]);
-    // O anexo espelho de cada consulta some junto — o prontuário do cliente
-    // inteiro é apagado pelo cliente logo em seguida, mas quem chama a API
-    // direto não pode ficar com áudio órfão apontando para um card morto.
+    // Cascata COMPLETA aqui, e não no navegador. Antes o front chamava
+    // DELETE /api/prontuarios/by-deal logo depois — o que deixava anexo órfão
+    // sempre que a chamada falhasse, e passou a dar 403 quando prontuário
+    // virou rota restrita a admin/doutor (a secretária também exclui card).
+    // Aqui a permissão do card já foi verificada acima, então a limpeza é
+    // legítima independentemente do cargo de quem apagou.
     await Promise.all(
       consultas.filter(c => c.prontuarioId).map(c => deleteProntuario(c.prontuarioId).catch(() => {})),
     );
+    await deleteProntuariosByDeal(req.params.id).catch(err =>
+      console.warn(`[deals] limpeza de prontuário falhou: ${err.message}`));
     if (io && compromissos) io.emit("appointment:wipe", { dealId: req.params.id });
     for (const conversa of desvinculadas) {
       if (io) io.to(`instance:${conversa.instanceId}`).emit("conversation:update", { conversation: conversa });

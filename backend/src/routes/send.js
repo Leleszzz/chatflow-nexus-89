@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router } from "../lib/safe-router.js";
 import multer from "multer";
 import fs from "node:fs/promises";
 import { connectionManager } from "../whatsapp/ConnectionManager.js";
@@ -9,8 +9,9 @@ import { cancelDueToAgentReply } from "../storage/scheduled-messages-repo.js";
 import { emitToInstance } from "../socket/events.js";
 import { requireAuth } from "../middleware/require-auth.js";
 import { requireInstanceAccess } from "../middleware/instance-access.js";
+import { config } from "../config.js";
 
-const upload = multer({ dest: "data/uploads", limits: { fileSize: 25 * 1024 * 1024 } });
+const upload = multer({ dest: config.paths.uploadsDir, limits: { fileSize: 25 * 1024 * 1024 } });
 
 function typeForOutgoing(kind) {
   if (kind === "image") return "image";

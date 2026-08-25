@@ -15,6 +15,7 @@ import { ScheduleFollowUpDialog } from "./ScheduleFollowUpDialog";
 import { ExamChecklistDialog } from "./ExamChecklistDialog";
 import { SendWhatsAppDialog } from "./SendWhatsAppDialog";
 import { cn } from "@/lib/utils";
+import { mensagemDeErro } from "@/lib/erros";
 
 interface Props {
   consultation: Consultation;
@@ -44,7 +45,7 @@ export function SuggestionsPanel({ consultation, deal, conversa }: Props) {
     try {
       await whatsappApi.updateConsultationSuggestion(consultation.id, sugestao.id, { status });
     } catch (err) {
-      toast.error(`Falha ao atualizar a sugestão: ${(err as Error).message}`);
+      toast.error(`Falha ao atualizar a sugestão: ${mensagemDeErro(err)}`);
       throw err;
     }
   };
@@ -56,7 +57,7 @@ export function SuggestionsPanel({ consultation, deal, conversa }: Props) {
     } catch (err) {
       // Sem marcar como feita: a sugestão continua no painel para ser reenviada
       // depois que a instância voltar.
-      toast.error(`Falha ao enviar: ${(err as Error).message}`);
+      toast.error(`Falha ao enviar: ${mensagemDeErro(err)}`);
       return;
     }
     await patch(sugestao, "feito").catch(() => {});

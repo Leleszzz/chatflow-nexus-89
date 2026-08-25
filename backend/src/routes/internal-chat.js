@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router } from "../lib/safe-router.js";
 import {
   listThreadsForUser,
   countUnreadForUser,
@@ -114,7 +114,7 @@ internalChatRouter.get("/threads/:id/messages", async (req, res) => {
   if (!thread) return;
   res.json(await listMessages(thread.id, {
     before: req.query.before ? String(req.query.before) : undefined,
-    limit: req.query.limit ? Number(req.query.limit) : undefined,
+    limit: req.query.limit,
   }));
 });
 

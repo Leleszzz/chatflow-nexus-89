@@ -1,9 +1,12 @@
-import { Router } from "express";
+import { Router } from "../lib/safe-router.js";
 import multer, { MulterError } from "multer";
 import fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import readline from "node:readline";
 import { requireAuth } from "../middleware/require-auth.js";
+import { config } from "../config.js";
+import { lookupLimiter } from "../middleware/rate-limit.js";
+import { registrarAsync, ACOES } from "../lib/auditoria.js";
 import {
   parseLeadsHeader,
   parseLeadLine,
@@ -13,10 +16,10 @@ import {
   clearLeads,
 } from "../storage/leads-repo.js";
 
-const MAX_MB = Number(process.env.LEADS_MAX_MB || 512);
+const MAX_MB = Number(process.env.LEADS_MAX_MB || 128);
 const LOTE = 5000; // registros por bulkWrite
 
-const upload = multer({ dest: "data/uploads", limits: { fileSize: MAX_MB * 1024 * 1024 } });
+const upload = multer({ dest: config.paths.uploadsDir, limits: { fileSize: MAX_MB * 1024 * 1024 } });
 
 export const leadsRouter = Router();
 leadsRouter.use(requireAuth());
@@ -42,10 +45,15 @@ leadsRouter.get("/stats", async (_req, res) => {
 });
 
 // Consulta a lista pelo telefone (ou JID) da conversa. Devolve null se não estiver.
-leadsRouter.get("/lookup", async (req, res) => {
+// Devolve nome + CPF a partir do telefone. Sem limite de taxa, dava para varrer
+// faixas de número e extrair a lista importada inteira.
+leadsRouter.get("/lookup", lookupLimiter, async (req, res) => {
   const phone = String(req.query.phone || "");
   if (!phone) return res.status(400).json({ error: "phone é obrigatório" });
-  res.json(await findLeadByPhone(phone));
+  const achado = await findLeadByPhone(phone);
+  // Devolve nome + CPF: cada consulta bem-sucedida entra na trilha.
+  if (achado) registrarAsync(req, ACOES.CONSULTAR_LEAD, { phoneKey: achado.phoneKey });
+  res.json(achado);
 });
 
 // Importa em STREAMING: o arquivo pode ter centenas de milhares de linhas e não

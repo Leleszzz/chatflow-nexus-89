@@ -12,6 +12,7 @@ import { whatsappApi } from "@/lib/whatsapp-api";
 import { MessageSquare, ShieldCheck, Smartphone, Tags } from "lucide-react";
 import { toast } from "sonner";
 import { ROLES, roleLabel, isAdminRole, type Role } from "@/lib/roles";
+import { mensagemDeErro } from "@/lib/erros";
 
 const ROLE_PROFILES: { name: string; role: Role; desc: string }[] = [
   { name: "Administrador", role: ROLES.ADMIN, desc: "Acesso total: usuários, instâncias, agentes e configurações. Não tem WhatsApp próprio." },
@@ -32,7 +33,7 @@ export default function Usuarios() {
       await whatsappApi.updateUser(selectedUser.id, patch);
       await refreshTeamUsers();
     } catch (err) {
-      toast.error(`Falha ao atualizar: ${(err as Error).message}`);
+      toast.error(`Falha ao atualizar: ${mensagemDeErro(err)}`);
     }
   };
 

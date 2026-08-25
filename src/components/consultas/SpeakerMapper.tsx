@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { whatsappApi } from "@/lib/whatsapp-api";
 import type { Consultation, ConsultationSpeaker, SpeakerRole } from "@/lib/whatsapp-api";
+import { mensagemDeErro } from "@/lib/erros";
 
 const PAPEIS: { value: SpeakerRole; label: string }[] = [
   { value: "medico", label: "Profissional" },
@@ -68,7 +69,7 @@ export function SpeakerMapper({ consultation, nomeDoProfissional }: Props) {
       // O estado chega de volta pelo socket (consultation:update).
       toast.success("Falantes identificados — a transcrição foi atualizada");
     } catch (err) {
-      toast.error(`Falha ao salvar: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Falha ao salvar: ${mensagemDeErro(err)}`);
     } finally {
       setSalvando(false);
     }

@@ -24,6 +24,7 @@ import { TEMPLATE_VARIABLES, renderTemplate, variaveisDesconhecidas } from "@/li
 import { Plus, Trash2, Pencil, KeyRound, Loader2, Upload, FileText, MessageSquareText, Stethoscope } from "lucide-react";
 import { toast } from "sonner";
 import { ROLES, ROLE_OPTIONS, roleLabel, isAtendente, isSecretariaRole, type Role } from "@/lib/roles";
+import { mensagemDeErro } from "@/lib/erros";
 
 
 const initialsFromName = (name: string) =>
@@ -176,7 +177,7 @@ export default function Configuracoes() {
       await refreshTeamUsers();
       setUserDialogOpen(false);
     } catch (err) {
-      toast.error(`Falha ao salvar: ${(err as Error).message}`);
+      toast.error(`Falha ao salvar: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -196,7 +197,7 @@ export default function Configuracoes() {
       await refreshTeamUsers();
       toast.success("Alterações salvas!");
     } catch (err) {
-      toast.error(`Falha ao salvar: ${(err as Error).message}`);
+      toast.error(`Falha ao salvar: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -210,7 +211,7 @@ export default function Configuracoes() {
         await refreshTeamUsers();
         toast.success("Foto atualizada");
       } catch (err) {
-        toast.error(`Falha: ${(err as Error).message}`);
+        toast.error(`Falha: ${mensagemDeErro(err)}`);
       }
     });
     event.target.value = "";
@@ -228,7 +229,7 @@ export default function Configuracoes() {
       await whatsappApi.updateUser(user.id, { active: !user.active });
       await refreshTeamUsers();
     } catch (err) {
-      toast.error(`Falha: ${(err as Error).message}`);
+      toast.error(`Falha: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -243,7 +244,7 @@ export default function Configuracoes() {
       await refreshTeamUsers();
       toast.success("Usuário excluído");
     } catch (err) {
-      toast.error(`Falha: ${(err as Error).message}`);
+      toast.error(`Falha: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -269,7 +270,7 @@ export default function Configuracoes() {
       setNewPassword("");
       setConfirmPassword("");
     } catch (err) {
-      toast.error((err as Error).message || "Falha ao alterar senha");
+      toast.error(mensagemDeErro(err) || "Falha ao alterar senha");
     } finally {
       setChangingPassword(false);
     }
@@ -288,7 +289,7 @@ export default function Configuracoes() {
       setOpenaiInput("");
       toast.success("Chave da OpenAI salva");
     } catch (err) {
-      toast.error((err as Error).message || "Falha ao salvar");
+      toast.error(mensagemDeErro(err) || "Falha ao salvar");
     } finally {
       setOpenaiSaving(false);
     }
@@ -302,7 +303,7 @@ export default function Configuracoes() {
       setOpenaiConfigured(false);
       toast.success("Chave removida");
     } catch (err) {
-      toast.error((err as Error).message || "Falha ao remover");
+      toast.error(mensagemDeErro(err) || "Falha ao remover");
     } finally {
       setOpenaiSaving(false);
     }
@@ -316,7 +317,7 @@ export default function Configuracoes() {
       setTranscriptionKey("");
       toast.success("Configuração de transcrição salva");
     } catch (err) {
-      toast.error((err as Error).message || "Falha ao salvar");
+      toast.error(mensagemDeErro(err) || "Falha ao salvar");
     } finally {
       setTranscriptionSaving(false);
     }
@@ -329,7 +330,7 @@ export default function Configuracoes() {
       setTranscription(await whatsappApi.deleteTranscriptionKey(provider));
       toast.success("Chave removida");
     } catch (err) {
-      toast.error((err as Error).message || "Falha ao remover");
+      toast.error(mensagemDeErro(err) || "Falha ao remover");
     } finally {
       setTranscriptionSaving(false);
     }
@@ -388,7 +389,7 @@ export default function Configuracoes() {
       }
       setQrDialogOpen(false);
     } catch (err) {
-      toast.error((err as Error).message || "Falha ao salvar");
+      toast.error(mensagemDeErro(err) || "Falha ao salvar");
     } finally {
       setQrSaving(false);
     }
@@ -401,7 +402,7 @@ export default function Configuracoes() {
       setQuickReplies(cur => cur.filter(q => q.id !== qr.id));
       toast.success("Mensagem removida");
     } catch (err) {
-      toast.error((err as Error).message || "Falha ao remover");
+      toast.error(mensagemDeErro(err) || "Falha ao remover");
     }
   };
 
@@ -416,7 +417,7 @@ export default function Configuracoes() {
       const ignorados = r.ignorados ? ` · ${r.ignorados} linha(s) ignorada(s)` : "";
       toast.success(`${r.lidos} registro(s) lidos — ${r.inseridos} novo(s), ${r.atualizados} atualizado(s)${ignorados}`);
     } catch (err) {
-      toast.error((err as Error).message || "Falha ao importar");
+      toast.error(mensagemDeErro(err) || "Falha ao importar");
     } finally {
       setLeadImporting(false);
     }
@@ -429,7 +430,7 @@ export default function Configuracoes() {
       setLeadStats({ total: 0, ultimaImportacao: "" });
       toast.success("Lista removida");
     } catch (err) {
-      toast.error((err as Error).message || "Falha ao remover");
+      toast.error(mensagemDeErro(err) || "Falha ao remover");
     }
   };
 

@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { mensagemDeErro } from "@/lib/erros";
 
 const VALID_MODEL_IDS = MODEL_OPTIONS.map(o => o.id);
 const normalizeModel = (id: string | undefined): Agent["model"] =>
@@ -144,7 +145,7 @@ export default function Agentes() {
       });
       setTestOutput(`${reply}\n\n[Resposta gerada pelo modelo ${model}]`);
     } catch (err) {
-      const msg = (err as Error).message || "Falha ao testar o agente";
+      const msg = mensagemDeErro(err) || "Falha ao testar o agente";
       if (msg.includes("OpenAI key não configurada")) {
         toast.error("Configure a OpenAI API key em Configurações");
       } else {

@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { Cable, Check, DownloadCloud, KeyRound, MessageSquare, Pencil, Power, QrCode, RefreshCcw, Smartphone, Trash2, Wifi, WifiOff, Loader2, X } from "lucide-react";
 import { isAtendente, roleLabel } from "@/lib/roles";
 import { toast } from "sonner";
+import { mensagemDeErro } from "@/lib/erros";
 
 const statusConfig: Record<InstanceStatus, { label: string; className: string; icon: typeof Wifi }> = {
   ativa: { label: "Ativa", className: "bg-success-soft text-success", icon: Wifi },
@@ -69,7 +70,7 @@ export default function Instancias() {
       setNewHistorySync("recent");
       setQrInstanceId(created.id);
     } catch (err) {
-      toast.error(`Falha ao criar instância: ${(err as Error).message}`);
+      toast.error(`Falha ao criar instância: ${mensagemDeErro(err)}`);
     } finally {
       setCreating(false);
     }
@@ -80,7 +81,7 @@ export default function Instancias() {
       await restartInstance(id);
       toast.success("Reconectando e verificando mensagens...");
     } catch (err) {
-      toast.error(`Falha: ${(err as Error).message}`);
+      toast.error(`Falha: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -92,7 +93,7 @@ export default function Instancias() {
       await setInstanceOwner(id, ownerId);
       toast.success(ownerId ? "Responsável atualizado" : "Responsável removido");
     } catch (err) {
-      toast.error(`Falha: ${(err as Error).message}`);
+      toast.error(`Falha: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -103,7 +104,7 @@ export default function Instancias() {
       await resyncHistory(id);
       toast.success("Sessão limpa — escaneie o QR para iniciar o sync completo do histórico");
     } catch (err) {
-      toast.error(`Falha: ${(err as Error).message}`);
+      toast.error(`Falha: ${mensagemDeErro(err)}`);
     } finally {
       setResyncingId(null);
     }
@@ -115,7 +116,7 @@ export default function Instancias() {
       await deleteInstance(id);
       toast.success("Instância removida");
     } catch (err) {
-      toast.error(`Falha: ${(err as Error).message}`);
+      toast.error(`Falha: ${mensagemDeErro(err)}`);
     }
   };
 
@@ -137,7 +138,7 @@ export default function Instancias() {
       await requestPairingCode(id, phone);
       toast.success("Código gerado — digite-o no WhatsApp");
     } catch (err) {
-      toast.error(`Falha ao gerar código: ${(err as Error).message}`);
+      toast.error(`Falha ao gerar código: ${mensagemDeErro(err)}`);
     } finally {
       setRequestingCode(false);
     }
@@ -159,7 +160,7 @@ export default function Instancias() {
       toast.success("Nome da instância atualizado");
       setEditingId(null);
     } catch (err) {
-      toast.error(`Falha: ${(err as Error).message}`);
+      toast.error(`Falha: ${mensagemDeErro(err)}`);
     }
   };
   const cancelRename = () => { setEditingId(null); setNameDraft(""); };

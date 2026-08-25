@@ -28,6 +28,24 @@ export async function hashPassword(password) {
 
 export async function verifyPassword(password, passwordHash, passwordSalt) {
   if (!passwordHash || !passwordSalt) return false;
-  const candidate = await derive(password, passwordSalt);
-  return crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(passwordHash));
+  if (typeof password !== "string" || !password) return false;
+
+  let candidate;
+  try {
+    candidate = await derive(password, passwordSalt);
+  } catch {
+    // Salt corrompido/ilegível: é senha inválida, não erro de servidor.
+    return false;
+  }
+
+  const a = Buffer.from(candidate);
+  const b = Buffer.from(passwordHash);
+  // timingSafeEqual LANÇA quando os buffers têm tamanhos diferentes
+  // (ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH). Um usuário com hash em formato
+  // antigo — vindo da semente src/banco-de-dados/users.json — fazia a rota de
+  // login estourar, e sem tratamento de erro isso derrubava o processo inteiro.
+  // Tamanho diferente já significa hash diferente: responder `false` é correto
+  // e não abre canal lateral (o comprimento do hash não é segredo).
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
 }

@@ -8,7 +8,11 @@
     "start": "node src/server.js",
     "dev": "nodemon --legacy-watch --watch src --ext js,json --ignore data --ignore node_modules --delay 500ms src/server.js",
     "test": "node --test tests/",
-    "test:connection": "node scripts/test-connection.js"
+    "test:connection": "node scripts/test-connection.js",
+    "seguranca:mongo": "node scripts/proteger-mongodb.js",
+    "seguranca:auditoria": "npm audit --omit=dev",
+    "seguranca:cifrar": "node scripts/cifrar-segredos.js",
+    "seguranca:e2e": "node scripts/testar-seguranca.mjs"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
@@ -16,16 +20,20 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.6.2",
     "ffmpeg-static": "^5.3.0",
+    "helmet": "^8.3.0",
     "mime-types": "^2.1.35",
     "mongodb": "^6.21.0",
     "multer": "^2.0.1",
     "nanoid": "^5.0.7",
     "pino": "^9.5.0",
     "qrcode": "^1.5.4",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "nodemon": "^3.1.7"
+    "nodemon": "^3.1.7",
+    "socket.io-client": "^4.8.3"
   }
 }

@@ -12,8 +12,10 @@ import {
   updateCampaignStatus,
 } from "../storage/campaigns-repo.js";
 // Mesmo motor de variáveis do front (quick replies) — importado, não copiado,
-// para {{nome}}/{{saudacao}} renderizarem igual nos dois lados.
-import { renderTemplate } from "../../../src/lib/message-template.js";
+// para {{nome}}/{{saudacao}} renderizarem igual nos dois lados. Mora em
+// /shared, e não na árvore do frontend, para o backend poder ser empacotado
+// sozinho.
+import { renderTemplate } from "../../../shared/message-template.js";
 
 // O tick é curto, mas cada campanha só envia quando já passou o seu próprio
 // `throttleMs` desde o último envio. Enviar rápido demais é o caminho mais
