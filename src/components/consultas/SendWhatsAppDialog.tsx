@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -29,15 +29,30 @@ export function SendWhatsAppDialog({
   const [texto, setTexto] = useState(textoInicial);
   const [enviando, setEnviando] = useState(false);
 
-  // O texto é remontado quando o checklist muda; enquanto o médico não editou à
-  // mão, o preview acompanha. Depois de editar, `textoInicial` para de mandar.
-  const [editadoAMao, setEditadoAMao] = useState(false);
+  /**
+   * O preview segue `textoInicial` sempre que ele MUDA de valor.
+   *
+   * Um texto novo só chega aqui por uma ação deliberada de quem chamou —
+   * desmarcar um exame do checklist, escolher uma mensagem rápida — e essas
+   * ações precisam ganhar do que já estava escrito, senão o clique não faz
+   * nada e parece defeito. O que a comparação evita é o oposto: um re-render
+   * qualquer com o MESMO texto apagando a edição em andamento.
+   */
+  const ultimoInicial = useRef(textoInicial);
   useEffect(() => {
-    if (!editadoAMao) setTexto(textoInicial);
-  }, [textoInicial, editadoAMao]);
+    if (ultimoInicial.current === textoInicial) return;
+    ultimoInicial.current = textoInicial;
+    setTexto(textoInicial);
+  }, [textoInicial]);
 
   useEffect(() => {
-    if (open) setEditadoAMao(false);
+    if (!open) return;
+    ultimoInicial.current = textoInicial;
+    setTexto(textoInicial);
+    // `textoInicial` de propósito fora das dependências: reabrir o diálogo
+    // recomeça do texto sugerido, mas mudanças durante o uso passam pelo efeito
+    // acima, que compara antes de sobrescrever.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const enviar = async () => {
@@ -64,7 +79,7 @@ export function SendWhatsAppDialog({
 
         <Textarea
           value={texto}
-          onChange={e => { setTexto(e.target.value); setEditadoAMao(true); }}
+          onChange={e => setTexto(e.target.value)}
           rows={9}
           className="text-sm"
         />

@@ -20,6 +20,7 @@ import { dealsRouter } from "./routes/deals.js";
 import { stagesRouter } from "./routes/stages.js";
 import { tagsRouter } from "./routes/tags.js";
 import { appointmentsRouter } from "./routes/appointments.js";
+import { tasksRouter } from "./routes/tasks.js";
 import { dealOutcomesRouter } from "./routes/deal-outcomes.js";
 import { customFieldsRouter } from "./routes/custom-fields.js";
 import { leadsRouter } from "./routes/leads.js";
@@ -105,6 +106,7 @@ async function main() {
   app.use("/api/stages", stagesRouter);
   app.use("/api/tags", tagsRouter);
   app.use("/api/appointments", appointmentsRouter);
+  app.use("/api/tasks", tasksRouter);
   app.use("/api/deal-outcomes", dealOutcomesRouter);
   app.use("/api/custom-fields", customFieldsRouter);
   app.use("/api/leads", leadsRouter);

@@ -10,9 +10,10 @@ import { Input } from "@/components/ui/input";
 import { useCRM } from "@/store/crm-store";
 import { TagBadge } from "@/components/shared/Badges";
 import { CustomFieldsPanel } from "@/components/shared/CustomFieldsPanel";
-import { CalendarClock, CheckCircle2, Clock3, FolderOpen, MessageCircle, Plus, Stethoscope, Trash2, UserRound } from "lucide-react";
+import { CalendarClock, CheckCircle2, ClipboardList, Clock3, FolderOpen, MessageCircle, Plus, Stethoscope, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { isAtendente } from "@/lib/roles";
+import { CriarTarefaDialog } from "@/components/tarefas/CriarTarefaDialog";
 
 const appointmentDateTime = (date: string, time: string) => new Date(`${date}T${time}`).getTime();
 
@@ -26,6 +27,7 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
 }) {
   const { updateDeal, removeDeal, tags, addTag, removeTag: removeGlobalTag, teamUsers, isAdmin, appointments, getProntuariosByDeal, getConsultationsByDeal } = useCRM();
   const [newTag, setNewTag] = useState("");
+  const [tarefaAberta, setTarefaAberta] = useState(false);
   const navigate = useNavigate();
 
   const leadAppointments = useMemo(() => {
@@ -185,6 +187,16 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
                 <Button
                   size="sm"
                   variant="outline"
+                  className="gap-2"
+                  title="Criar tarefa para a secretaria"
+                  onClick={() => setTarefaAberta(true)}
+                >
+                  <ClipboardList className="w-4 h-4" />
+                  Tarefa
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
                   className="gap-2 border-success/30 text-success hover:text-success"
                   title="Abrir conversa no WhatsApp"
                   onClick={() => {
@@ -310,6 +322,13 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
           </DialogFooter>
         </div>
       </DialogContent>
+
+      <CriarTarefaDialog
+        open={tarefaAberta}
+        onOpenChange={setTarefaAberta}
+        nomePaciente={deal.customer}
+        rascunho={{ dealId: deal.id, origem: "kanban" }}
+      />
     </Dialog>
   );
 }

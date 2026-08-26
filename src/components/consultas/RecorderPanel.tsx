@@ -1,6 +1,8 @@
-import { Mic, Pause, Play, Square, X } from "lucide-react";
+import { useRef, useState } from "react";
+import { Mic, Pause, Play, Square, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RecordingWaveform } from "@/components/chat/RecordingWaveform";
+import { ACCEPT_IMPORTACAO } from "@/lib/audio-file";
 import { cn } from "@/lib/utils";
 import type { RecorderState } from "@/hooks/useConsultationRecorder";
 
@@ -23,17 +25,57 @@ type Props = {
   onResume: () => void;
   onStop: () => void;
   onCancel: () => void;
+  /** Arquivo escolhido no seletor ou solto na área. */
+  onImport: (file: File) => void;
   className?: string;
 };
 
 export function RecorderPanel({
-  state, seconds, stream, onStart, onPause, onResume, onStop, onCancel, className,
+  state, seconds, stream, onStart, onPause, onResume, onStop, onCancel, onImport, className,
 }: Props) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [arrastando, setArrastando] = useState(false);
+
   if (state === "parado") {
     return (
-      <Button size="lg" className={cn("gap-2", className)} onClick={onStart}>
-        <Mic className="h-5 w-5" /> Gravar consulta
-      </Button>
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-3 rounded-2xl border border-dashed p-4 transition",
+          arrastando ? "border-primary bg-primary-soft" : "border-border bg-secondary/20",
+          className,
+        )}
+        onDragOver={e => { e.preventDefault(); setArrastando(true); }}
+        onDragLeave={() => setArrastando(false)}
+        onDrop={e => {
+          e.preventDefault();
+          setArrastando(false);
+          const file = Array.from(e.dataTransfer.files)[0];
+          if (file) onImport(file);
+        }}
+      >
+        <Button size="lg" className="gap-2" onClick={onStart}>
+          <Mic className="h-5 w-5" /> Gravar consulta
+        </Button>
+        <Button size="lg" variant="outline" className="gap-2" onClick={() => inputRef.current?.click()}>
+          <Upload className="h-5 w-5" /> Importar áudio
+        </Button>
+        <span className="text-xs text-muted-foreground">
+          ou arraste aqui um áudio ou vídeo gravado fora do sistema
+        </span>
+        <input
+          ref={inputRef}
+          type="file"
+          accept={ACCEPT_IMPORTACAO}
+          className="hidden"
+          onChange={e => {
+            const file = e.target.files?.[0];
+            // Zerar permite escolher o MESMO arquivo de novo depois de um erro:
+            // sem isto o `change` não dispara na segunda vez.
+            e.target.value = "";
+            if (file) onImport(file);
+          }}
+        />
+      </div>
     );
   }
 

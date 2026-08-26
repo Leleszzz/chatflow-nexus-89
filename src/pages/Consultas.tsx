@@ -34,6 +34,7 @@ import { useConsultationRecorder, GravacaoPronta } from "@/hooks/useConsultation
 import { clearSession, listSessions, loadSession, pruneOldSessions, RecordingSession } from "@/lib/recording-store";
 import { useCRM } from "@/store/crm-store";
 import { whatsappApi, Consultation, TranscriptionStatus, WAConversation } from "@/lib/whatsapp-api";
+import { duracaoDoArquivo, recusaImportacao } from "@/lib/audio-file";
 import { cn } from "@/lib/utils";
 import { mensagemDeErro } from "@/lib/erros";
 
@@ -202,6 +203,33 @@ export default function Consultas() {
     setGravadaEm(new Date().toISOString());
   };
 
+  /**
+   * Importa uma gravação feita fora do navegador.
+   *
+   * Monta a mesma `GravacaoPronta` que o gravador produz, então tudo o que vem
+   * depois (anexar ao paciente, subir, transcrever) segue idêntico. Sem
+   * `sessionId`: o arquivo não tem backup em pedaços para limpar.
+   */
+  const importarArquivo = async (file: File) => {
+    if (!configurado) {
+      toast.error("Configure a chave de transcrição em Configurações → Transcrição antes de importar");
+      return;
+    }
+    const recusa = recusaImportacao(file);
+    if (recusa) {
+      toast.error(recusa);
+      return;
+    }
+
+    // Medir aqui evita mostrar "00:00" no diálogo de anexar. Se falhar, o
+    // servidor corrige a duração com o ffmpeg ao fim da transcrição.
+    const durationSec = await duracaoDoArquivo(file);
+    setGravacao({ blob: file, file, durationSec });
+    // A data do arquivo, e não "agora": é dela que sai o título sugerido, e uma
+    // consulta de terça importada na sexta não pode nascer datada de sexta.
+    setGravadaEm(new Date(file.lastModified || Date.now()).toISOString());
+  };
+
   const cancelarGravacao = async () => {
     if (!window.confirm("Descartar esta gravação? O áudio será perdido.")) return;
     await recorder.stop(true);
@@ -246,7 +274,8 @@ export default function Consultas() {
         setProgresso,
       );
       // Só apaga o backup local depois que o servidor confirmou o recebimento.
-      await clearSession(gravacao.sessionId).catch(() => {});
+      // Arquivo importado não tem sessão para limpar.
+      if (gravacao.sessionId) await clearSession(gravacao.sessionId).catch(() => {});
       setGravacao(null);
       setSelecionadaId(criada.id);
       await refreshConsultations();
@@ -359,6 +388,7 @@ export default function Consultas() {
           onResume={recorder.resume}
           onStop={encerrarGravacao}
           onCancel={cancelarGravacao}
+          onImport={importarArquivo}
         />
 
         <div className="grid h-[calc(100vh-280px)] min-h-[420px] grid-cols-1 gap-4 lg:grid-cols-[340px_1fr]">
@@ -392,7 +422,7 @@ export default function Consultas() {
             <div className="flex-1 overflow-y-auto p-2">
               {filtradas.length === 0 ? (
                 <div className="p-6 text-center text-sm text-muted-foreground">
-                  Nenhuma consulta gravada ainda. Use o botão "Gravar consulta" acima.
+                  Nenhuma consulta ainda. Grave pelo navegador ou importe um áudio acima.
                 </div>
               ) : (
                 filtradas.map(consulta => {

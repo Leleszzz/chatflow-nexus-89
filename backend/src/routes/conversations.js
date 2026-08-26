@@ -81,7 +81,19 @@ conversationsRouter.get("/by-deal/:dealId", async (req, res) => {
   if (!deal) return res.status(404).json({ error: "cliente não encontrado" });
   if (!canUserSeeDeal(req.user, deal)) return res.status(403).json({ error: "sem permissão para este cliente" });
 
-  const conv = await findConversationByDealId(deal.id, { phone: deal.phone });
+  // `?instanceId=` fixa o número: é assim que a fila da secretaria garante que a
+  // cobrança sai pelo WhatsApp da clínica, e não pelo pessoal do doutor. Sem o
+  // parâmetro, vale o recorte de instâncias que o usuário pode usar — antes esta
+  // rota não olhava instância nenhuma e podia entregar ao doutor a conversa da
+  // secretária, num número em que ele nem consegue enviar.
+  const permitidas = await allowedInstanceIdsForRequest(req);
+  const pedida = req.query.instanceId ? String(req.query.instanceId) : "";
+  if (pedida && !(await userCanUseInstance(req.user, pedida))) {
+    return res.status(403).json({ error: "sem acesso a esta instância" });
+  }
+  const instanceIds = pedida ? [pedida] : (permitidas ?? undefined);
+
+  const conv = await findConversationByDealId(deal.id, { phone: deal.phone, instanceIds });
   if (!conv) return res.status(404).json({ error: "este cliente ainda não tem conversa no WhatsApp" });
   res.json(conv);
 });

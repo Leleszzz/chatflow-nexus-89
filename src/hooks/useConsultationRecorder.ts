@@ -26,7 +26,12 @@ export type GravacaoPronta = {
   blob: Blob;
   file: File;
   durationSec: number;
-  sessionId: string;
+  /**
+   * Sessão do backup em IndexedDB. Ausente num arquivo importado, que nunca foi
+   * gravado em pedaços — e que de propósito NÃO vira sessão: o banner de
+   * "recuperamos uma gravação" reapareceria a cada recarga da página.
+   */
+  sessionId?: string;
 };
 
 export function useConsultationRecorder() {

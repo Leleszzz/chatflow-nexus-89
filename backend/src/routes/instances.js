@@ -7,6 +7,7 @@ import { removeConversationsByInstance, countConversations } from "../storage/co
 import { requireAuth } from "../middleware/require-auth.js";
 import { requireInstanceAccess } from "../middleware/instance-access.js";
 import { canUserSeeInstance } from "../lib/instance-permissions.js";
+import { isValidInstanceKind, normalizeInstanceKind, INSTANCE_KIND_VALUES } from "../lib/instance-kinds.js";
 import { getSanitizedUser } from "../storage/users-repo.js";
 import { registrarAsync, ACOES } from "../lib/auditoria.js";
 
@@ -58,11 +59,18 @@ instancesRouter.post("/", requireAuth({ admin: true }), async (req, res) => {
   const dono = await validarDono(req.body?.ownerId ?? null);
   if (!dono.ok) return res.status(400).json({ error: dono.error });
 
+  // O tipo é opcional na criação: quem não informa fica com o número da
+  // recepção, que é o padrão seguro (ver lib/instance-kinds.js).
+  if (req.body?.tipo !== undefined && !isValidInstanceKind(req.body.tipo)) {
+    return res.status(400).json({ error: `tipo inválido: use ${INSTANCE_KIND_VALUES.join(", ")}` });
+  }
+
   const id = `wa-${nanoid(8)}`;
   const instance = {
     id,
     name,
     ownerId: dono.value,
+    tipo: normalizeInstanceKind(req.body?.tipo),
     phone: "",
     status: "conectando",
     lastSync: "",
@@ -93,6 +101,12 @@ instancesRouter.patch("/:id", requireAuth({ admin: true }), async (req, res) => 
     const dono = await validarDono(req.body.ownerId);
     if (!dono.ok) return res.status(400).json({ error: dono.error });
     patch.ownerId = dono.value;
+  }
+  if (req.body?.tipo !== undefined) {
+    if (!isValidInstanceKind(req.body.tipo)) {
+      return res.status(400).json({ error: `tipo inválido: use ${INSTANCE_KIND_VALUES.join(", ")}` });
+    }
+    patch.tipo = normalizeInstanceKind(req.body.tipo);
   }
   if (Object.keys(patch).length === 0) return res.json(inst);
   await patchInstance(req.params.id, patch);

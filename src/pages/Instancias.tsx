@@ -10,6 +10,7 @@ import { InstanceStatus, HistorySyncMode } from "@/lib/whatsapp-api";
 import { cn } from "@/lib/utils";
 import { Cable, Check, DownloadCloud, KeyRound, MessageSquare, Pencil, Power, QrCode, RefreshCcw, Smartphone, Trash2, Wifi, WifiOff, Loader2, X } from "lucide-react";
 import { isAtendente, roleLabel } from "@/lib/roles";
+import { INSTANCE_KINDS, INSTANCE_KIND_OPTIONS, InstanceKind, normalizeInstanceKind } from "@/lib/instance-kinds";
 import { toast } from "sonner";
 import { mensagemDeErro } from "@/lib/erros";
 
@@ -29,11 +30,12 @@ const formatDateTime = (value: string) =>
 
 export default function Instancias() {
   const { isAdmin, teamUsers } = useCRM();
-  const { instances, loading, error, qrByInstance, pairingCodeByInstance, createInstance, restartInstance, resyncHistory, deleteInstance, fetchQr, requestPairingCode, renameInstance, setInstanceOwner } = useInstances();
+  const { instances, loading, error, qrByInstance, pairingCodeByInstance, createInstance, restartInstance, resyncHistory, deleteInstance, fetchQr, requestPairingCode, renameInstance, setInstanceOwner, setInstanceKind } = useInstances();
   const [resyncingId, setResyncingId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newHistorySync, setNewHistorySync] = useState<HistorySyncMode>("recent");
+  const [newTipo, setNewTipo] = useState<InstanceKind>(INSTANCE_KINDS.SECRETARIA);
   const [creating, setCreating] = useState(false);
   const [qrInstanceId, setQrInstanceId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -63,11 +65,12 @@ export default function Instancias() {
     }
     setCreating(true);
     try {
-      const created = await createInstance(name, newHistorySync);
+      const created = await createInstance(name, newHistorySync, newTipo);
       toast.success("Instância criada — escaneie o QR Code");
       setCreateOpen(false);
       setNewName("");
       setNewHistorySync("recent");
+      setNewTipo(INSTANCE_KINDS.SECRETARIA);
       setQrInstanceId(created.id);
     } catch (err) {
       toast.error(`Falha ao criar instância: ${mensagemDeErro(err)}`);
@@ -92,6 +95,17 @@ export default function Instancias() {
     try {
       await setInstanceOwner(id, ownerId);
       toast.success(ownerId ? "Responsável atualizado" : "Responsável removido");
+    } catch (err) {
+      toast.error(`Falha: ${mensagemDeErro(err)}`);
+    }
+  };
+
+  const handleKindChange = async (id: string, tipo: InstanceKind) => {
+    try {
+      await setInstanceKind(id, tipo);
+      toast.success(tipo === INSTANCE_KINDS.DOUTOR
+        ? "Marcado como WhatsApp do doutor"
+        : "Marcado como WhatsApp da secretaria");
     } catch (err) {
       toast.error(`Falha: ${mensagemDeErro(err)}`);
     }
@@ -278,6 +292,29 @@ export default function Instancias() {
                   </div>
                 </div>
 
+                {/* O que este número é no consultório. Decide por onde a
+                    secretaria cobra exames e a quem aparece o botão de falar
+                    pelo WhatsApp próprio — ver src/lib/instance-kinds.ts. */}
+                <div className="mb-4">
+                  <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">Tipo</div>
+                  <Select
+                    value={normalizeInstanceKind(instance.tipo)}
+                    onValueChange={value => handleKindChange(instance.id, value as InstanceKind)}
+                  >
+                    <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {INSTANCE_KIND_OPTIONS.map(opt => (
+                        <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {normalizeInstanceKind(instance.tipo) === INSTANCE_KINDS.DOUTOR && !instance.ownerId && (
+                    <p className="mt-1 text-[11px] text-warning">
+                      Defina o responsável abaixo: sem ele o doutor não recebe o botão de falar por este número.
+                    </p>
+                  )}
+                </div>
+
                 {/* Quem é dono do canal. O dono enxerga e usa a instância sem
                     precisar de liberação; os demais só entram pela lista
                     "Instâncias permitidas" em Usuários. */}
@@ -356,6 +393,20 @@ export default function Instancias() {
               placeholder="Ex.: WhatsApp Principal"
               onKeyDown={e => e.key === "Enter" && handleCreate()}
             />
+            <label className="text-xs font-semibold uppercase text-muted-foreground">Tipo</label>
+            <Select value={newTipo} onValueChange={value => setNewTipo(value as InstanceKind)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {INSTANCE_KIND_OPTIONS.map(opt => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              O número da recepção é usado pela secretaria para cobrar exames e confirmar consultas.
+              O do doutor fica reservado ao atendimento pessoal dele.
+            </p>
+
             <label className="text-xs font-semibold uppercase text-muted-foreground">Conversas antigas</label>
             <div className="space-y-2">
               {([

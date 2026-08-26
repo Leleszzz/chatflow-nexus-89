@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Check, Sparkles, X } from "lucide-react";
+import { Check, Sparkles, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Deal } from "@/lib/mock-data";
@@ -14,6 +14,7 @@ import {
 import { ScheduleFollowUpDialog } from "./ScheduleFollowUpDialog";
 import { ExamChecklistDialog } from "./ExamChecklistDialog";
 import { SendWhatsAppDialog } from "./SendWhatsAppDialog";
+import { CriarTarefaDialog, RascunhoTarefa } from "@/components/tarefas/CriarTarefaDialog";
 import { cn } from "@/lib/utils";
 import { mensagemDeErro } from "@/lib/erros";
 
@@ -34,6 +35,7 @@ interface Props {
 export function SuggestionsPanel({ consultation, deal, conversa }: Props) {
   const navigate = useNavigate();
   const [aberta, setAberta] = useState<ConsultationSuggestion | null>(null);
+  const [rascunho, setRascunho] = useState<RascunhoTarefa | null>(null);
 
   const pendencias = pendentes(consultation.suggestions);
   const feitas = concluidas(consultation.suggestions);
@@ -114,15 +116,31 @@ export function SuggestionsPanel({ consultation, deal, conversa }: Props) {
                     {def.resumo(sugestao.payload)}
                   </p>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 shrink-0 text-muted-foreground"
-                  title="Dispensar"
-                  onClick={() => patch(sugestao, "dispensado").catch(() => {})}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
+                <div className="flex shrink-0 flex-col gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground"
+                    title="Criar tarefa para a secretaria"
+                    onClick={() => setRascunho({
+                      ...def.tarefa(sugestao.payload, { nome }),
+                      dealId: consultation.dealId,
+                      consultationId: consultation.id,
+                      origem: "consulta",
+                    })}
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground"
+                    title="Dispensar"
+                    onClick={() => patch(sugestao, "dispensado").catch(() => {})}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
               </div>
             );
           })}
@@ -141,6 +159,15 @@ export function SuggestionsPanel({ consultation, deal, conversa }: Props) {
           </div>
         )}
       </div>
+
+      {rascunho && (
+        <CriarTarefaDialog
+          open
+          onOpenChange={a => { if (!a) setRascunho(null); }}
+          rascunho={rascunho}
+          nomePaciente={nome}
+        />
+      )}
 
       {aberta?.tipo === "agendar_retorno" && (
         <ScheduleFollowUpDialog

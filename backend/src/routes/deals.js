@@ -8,6 +8,7 @@ import {
 } from "../storage/deals-repo.js";
 import { clearCrmDealLink } from "../storage/conversations-repo.js";
 import { deleteAppointmentsByDeal } from "../storage/appointments-repo.js";
+import { deleteTasksByDeal } from "../storage/tasks-repo.js";
 import { deleteOutcomesByDeal } from "../storage/deal-outcomes-repo.js";
 import { deleteConsultationsByDeal } from "../storage/consultations-repo.js";
 import { deleteProntuario, deleteProntuariosByDeal } from "../storage/prontuarios-repo.js";
@@ -83,13 +84,14 @@ dealsRouter.delete("/:id", requireAuth(), async (req, res) => {
     // Cascade no servidor (e não no cliente): agenda e fechamentos do card somem
     // junto para todo mundo, não só para quem clicou em excluir.
     const io = req.app.get("io");
-    const [compromissos, , desvinculadas, consultas] = await Promise.all([
+    const [compromissos, , desvinculadas, consultas, tarefas] = await Promise.all([
       deleteAppointmentsByDeal(req.params.id),
       deleteOutcomesByDeal(req.params.id),
       // Solta a conversa que apontava para este card, senão ela ficaria presa a
       // um id morto e sem como criar um card novo.
       clearCrmDealLink(req.params.id),
       deleteConsultationsByDeal(req.params.id),
+      deleteTasksByDeal(req.params.id),
     ]);
     // Cascata COMPLETA aqui, e não no navegador. Antes o front chamava
     // DELETE /api/prontuarios/by-deal logo depois — o que deixava anexo órfão
@@ -103,6 +105,12 @@ dealsRouter.delete("/:id", requireAuth(), async (req, res) => {
     await deleteProntuariosByDeal(req.params.id).catch(err =>
       console.warn(`[deals] limpeza de prontuário falhou: ${err.message}`));
     if (io && compromissos) io.emit("appointment:wipe", { dealId: req.params.id });
+    // A fila da secretaria não pode ficar cobrando exame de um paciente que
+    // não existe mais. Um evento por tarefa, para casar com o `task:delete`
+    // que a tela já escuta.
+    for (const tarefa of tarefas) {
+      if (io) io.emit("task:delete", { taskId: tarefa.id });
+    }
     for (const conversa of desvinculadas) {
       if (io) io.to(`instance:${conversa.instanceId}`).emit("conversation:update", { conversation: conversa });
     }

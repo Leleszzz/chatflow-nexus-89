@@ -84,3 +84,13 @@ test("cargo desconhecido cai no menor privilégio, nunca em admin", () => {
     assert.equal(isAdmin({ role: valor }), false, `"${valor}" não pode virar admin`);
   }
 });
+
+test("a fila de tarefas fica aberta aos três cargos — a secretária é quem a executa", async () => {
+  const { tasksRouter } = await import("../src/routes/tasks.js");
+  const guardas = guardasDoRouter(tasksRouter);
+  assert.ok(guardas.length > 0, "router de tarefas não exige autenticação");
+  // `null` = exige login, sem recorte de cargo. Restringir aqui a admin/doutor
+  // seria o mesmo erro de consultas ao contrário: trancaria a fila para quem
+  // trabalha nela. A permissão fina é por tarefa (podeVer/podeEscrever).
+  assert.ok(guardas.every(g => g === null), "tarefas não devem ser restritas por cargo no router");
+});

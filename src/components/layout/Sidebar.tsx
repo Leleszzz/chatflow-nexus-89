@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Kanban, MessageSquare, CalendarDays, Bot, BarChart3, Settings, Sparkles, Smartphone, Megaphone, Users, UsersRound, X, FolderOpen, Stethoscope } from "lucide-react";
+import { LayoutDashboard, Kanban, MessageSquare, CalendarDays, Bot, BarChart3, Settings, Sparkles, Smartphone, Megaphone, Users, UsersRound, X, FolderOpen, Stethoscope, ClipboardList } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useCRM } from "@/store/crm-store";
 import { canRoleAccess } from "@/lib/roles";
@@ -22,6 +22,7 @@ const sections: {
       { to: "/calendario", label: "Calendário", icon: CalendarDays },
       { to: "/prontuarios", label: "Prontuários", icon: FolderOpen },
       { to: "/consultas", label: "Consultas", icon: Stethoscope },
+      { to: "/secretaria", label: "Secretaria", icon: ClipboardList },
     ],
   },
   {

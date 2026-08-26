@@ -5,7 +5,7 @@ import type {
 } from "@/lib/mock-data";
 import { Deal, DealStage, Agent, AgentUsage, ALL_TAGS, STAGES, Stage, CustomField, CustomFieldValues } from "@/lib/mock-data";
 import { ROLES, seesAllDeals, roleHasPermission, isAtendente, normalizeRole, type PermissionKey, type Role } from "@/lib/roles";
-import { whatsappApi, UserRecord, ProntuarioAttachment, ProntuarioCategory, Consultation } from "@/lib/whatsapp-api";
+import { whatsappApi, UserRecord, ProntuarioAttachment, ProntuarioCategory, Consultation, Task } from "@/lib/whatsapp-api";
 import { getSocket, reconnectSocket } from "@/lib/whatsapp-socket";
 import { mensagemDeErro } from "@/lib/erros";
 
@@ -194,6 +194,11 @@ interface CRMCtx {
   refreshConsultations: () => Promise<void>;
   getConsultationsByDeal: (dealId: string) => Consultation[];
   removeConsultation: (id: string) => Promise<void>;
+  tasks: Task[];
+  refreshTasks: () => Promise<void>;
+  createTask: (task: Partial<Task>) => Promise<Task>;
+  updateTask: (id: string, patch: Partial<Task>) => Promise<void>;
+  removeTask: (id: string) => Promise<void>;
 }
 
 const Ctx = createContext<CRMCtx | null>(null);
@@ -333,6 +338,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   const [leadDistribution, setLeadDistributionState] = useState<LeadDistribution>(DEFAULT_LEAD_DISTRIBUTION);
   const [prontuarios, setProntuarios] = useState<ProntuarioAttachment[]>([]);
   const [consultations, setConsultations] = useState<Consultation[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [agentSchedule, setAgentScheduleState] = useState<AgentSchedule>(DEFAULT_AGENT_SCHEDULE);
   // Espelhos síncronos: os setters resolvem a forma de updater sem depender do
   // estado do render atual (nem executar efeito colateral dentro do updater).
@@ -384,6 +390,14 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       setConsultations(list);
     } catch (err) {
       console.warn("[crm-store] listConsultations failed", err);
+    }
+  }, []);
+
+  const refreshTasks = useCallback(async () => {
+    try {
+      setTasks(await whatsappApi.listTasks());
+    } catch (err) {
+      console.warn("[crm-store] listTasks failed", err);
     }
   }, []);
 
@@ -539,6 +553,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     refreshTeamUsers();
     refreshProntuarios();
     refreshConsultations();
+    refreshTasks();
     refreshAgentUsage();
     refreshDeals();
     refreshStages();
@@ -550,7 +565,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     refreshLeadDistribution();
     refreshAgentSchedule();
     refreshConversationPatches();
-  }, [currentUserId, refreshTeamUsers, refreshProntuarios, refreshConsultations, refreshAgentUsage, refreshDeals, refreshStages,
+  }, [currentUserId, refreshTeamUsers, refreshProntuarios, refreshConsultations, refreshTasks, refreshAgentUsage, refreshDeals, refreshStages,
       refreshAgents, refreshCustomFields, refreshTags, refreshAppointments, refreshDealOutcomes,
       refreshLeadDistribution, refreshAgentSchedule, refreshConversationPatches]);
 
@@ -634,6 +649,20 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       const id = payload?.consultation?.id;
       if (id) setConsultations(prev => prev.filter(c => c.id !== id));
     };
+    const onTask = (payload: { task: Task }) => {
+      const task = payload?.task;
+      if (!task?.id) return;
+      setTasks(prev => {
+        const idx = prev.findIndex(t => t.id === task.id);
+        if (idx === -1) return [task, ...prev];
+        const next = prev.slice();
+        next[idx] = task;
+        return next;
+      });
+    };
+    const onTaskDelete = (payload: { taskId: string }) => {
+      if (payload?.taskId) setTasks(prev => prev.filter(t => t.id !== payload.taskId));
+    };
     socket.on("deal:new", upsertDeal);
     socket.on("deal:update", upsertDeal);
     socket.on("deal:delete", onDealDelete);
@@ -650,6 +679,8 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     socket.on("conversation:update", onConversationCrm);
     socket.on("consultation:update", onConsultation);
     socket.on("consultation:delete", onConsultationDelete);
+    socket.on("task:update", onTask);
+    socket.on("task:delete", onTaskDelete);
     return () => {
       socket.off("deal:new", upsertDeal);
       socket.off("deal:update", upsertDeal);
@@ -667,6 +698,8 @@ export function CRMProvider({ children }: { children: ReactNode }) {
       socket.off("conversation:update", onConversationCrm);
       socket.off("consultation:update", onConsultation);
       socket.off("consultation:delete", onConsultationDelete);
+      socket.off("task:update", onTask);
+      socket.off("task:delete", onTaskDelete);
     };
   }, [currentUserId]);
 
@@ -1013,6 +1046,26 @@ export function CRMProvider({ children }: { children: ReactNode }) {
     if (prontuarioId) setProntuarios(prev => prev.filter(p => p.id !== prontuarioId));
   };
 
+  // Tarefa não usa a atualização otimista do resto do store: o servidor decide
+  // quem concluiu e quando, e a fila da recepção é compartilhada — mostrar
+  // "concluída" antes da confirmação faria duas pessoas pensarem que pegaram a
+  // mesma tarefa. O socket `task:update` reconcilia todo mundo em seguida.
+  const createTask: CRMCtx["createTask"] = async task => {
+    const criada = await whatsappApi.createTask(task);
+    setTasks(prev => (prev.some(t => t.id === criada.id) ? prev : [criada, ...prev]));
+    return criada;
+  };
+
+  const updateTask: CRMCtx["updateTask"] = async (id, patch) => {
+    const atualizada = await whatsappApi.updateTask(id, patch);
+    setTasks(prev => prev.map(t => (t.id === id ? atualizada : t)));
+  };
+
+  const removeTask: CRMCtx["removeTask"] = async id => {
+    await whatsappApi.deleteTask(id);
+    setTasks(prev => prev.filter(t => t.id !== id));
+  };
+
   const renameProntuario: CRMCtx["renameProntuario"] = async (id, name) => {
     const updated = await whatsappApi.renameProntuario(id, name);
     setProntuarios(prev => prev.map(p => (p.id === id ? updated : p)));
@@ -1024,7 +1077,7 @@ export function CRMProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <Ctx.Provider value={{ deals, setDeals, addDeal, removeDeal, moveDeal, updateDeal, stages, addStage, updateStage, moveStage, reorderStage, removeStage, appointments, addAppointment, updateAppointment, removeAppointment, finished, finishDeal, agents, addAgent, updateAgentConfig, removeAgent, customFields, refreshCustomFields, setDealCustomField, agentUsage, refreshAgentUsage, resetAgentUsage: resetAgentUsageRemote, tags, addTag, removeTag, teamUsers, setTeamUsers, accountProfile, setAccountProfile, currentUser, authReady, isAdmin, isDoutor, isSecretaria, currentRole, login, logout, hasPermission, canViewDeal, changePassword, refreshTeamUsers, conversationPatches, setConversationPatch, clearSchedulingProposal, leadDistribution, setLeadDistribution, agentSchedule, setAgentSchedule, getEligibleSellers, assignNextSeller, applyScheduledAgentIfActive, isAgentScheduleActive, prontuarios, refreshProntuarios, getProntuariosByDeal, linkMessageToProntuario, uploadProntuarioFile, renameProntuario, removeProntuario, consultations, refreshConsultations, getConsultationsByDeal, removeConsultation }}>
+    <Ctx.Provider value={{ deals, setDeals, addDeal, removeDeal, moveDeal, updateDeal, stages, addStage, updateStage, moveStage, reorderStage, removeStage, appointments, addAppointment, updateAppointment, removeAppointment, finished, finishDeal, agents, addAgent, updateAgentConfig, removeAgent, customFields, refreshCustomFields, setDealCustomField, agentUsage, refreshAgentUsage, resetAgentUsage: resetAgentUsageRemote, tags, addTag, removeTag, teamUsers, setTeamUsers, accountProfile, setAccountProfile, currentUser, authReady, isAdmin, isDoutor, isSecretaria, currentRole, login, logout, hasPermission, canViewDeal, changePassword, refreshTeamUsers, conversationPatches, setConversationPatch, clearSchedulingProposal, leadDistribution, setLeadDistribution, agentSchedule, setAgentSchedule, getEligibleSellers, assignNextSeller, applyScheduledAgentIfActive, isAgentScheduleActive, prontuarios, refreshProntuarios, getProntuariosByDeal, linkMessageToProntuario, uploadProntuarioFile, renameProntuario, removeProntuario, consultations, refreshConsultations, getConsultationsByDeal, removeConsultation, tasks, refreshTasks, createTask, updateTask, removeTask }}>
       {children}
     </Ctx.Provider>
   );

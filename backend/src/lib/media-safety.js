@@ -35,12 +35,59 @@ const INLINE_PERMITIDO = new Map([
   ["audio/aac", "aac"],
   ["audio/wav", "wav"],
   ["audio/webm", "weba"],
+  // Gravador de celular e Windows emitem estes. Sem eles o arquivo importado
+  // virava .bin, servido como octet-stream, e o player da tela de Consultas
+  // ficava mudo com um áudio que estava salvo e transcrito corretamente.
+  ["audio/x-wav", "wav"],
+  ["audio/wave", "wav"],
+  ["audio/vnd.wave", "wav"],
+  ["audio/x-pn-wav", "wav"],
+  ["audio/flac", "flac"],
+  ["audio/x-flac", "flac"],
+  ["audio/amr", "amr"],
+  ["audio/3gpp", "3gp"],
+  ["audio/x-ms-wma", "wma"],
+  ["audio/mp4a-latm", "m4a"],
+  ["audio/x-caf", "caf"],
   ["video/mp4", "mp4"],
   ["video/webm", "webm"],
   ["video/quicktime", "mov"],
   ["video/3gpp", "3gp"],
+  ["video/x-matroska", "mkv"],
   ["application/pdf", "pdf"],
 ]);
+
+/**
+ * Extensão do arquivo -> mimetype, para quando o navegador não informa um.
+ *
+ * O Windows manda mimetype vazio para `.opus` e `.amr`, e alguns navegadores
+ * mandam "application/octet-stream" para `.m4a`. Só é consultado nesse caso —
+ * o mimetype declarado, quando existe, continua mandando, porque adivinhar
+ * pela extensão de um arquivo que veio de um contato do WhatsApp seria
+ * exatamente o buraco que este módulo existe para fechar.
+ */
+const MIME_POR_EXTENSAO = new Map([
+  ["mp3", "audio/mpeg"], ["m4a", "audio/mp4"], ["m4b", "audio/mp4"],
+  ["aac", "audio/aac"], ["wav", "audio/wav"], ["ogg", "audio/ogg"],
+  ["oga", "audio/ogg"], ["opus", "audio/ogg"], ["flac", "audio/flac"],
+  ["amr", "audio/amr"], ["wma", "audio/x-ms-wma"], ["weba", "audio/webm"],
+  ["caf", "audio/x-caf"], ["3gp", "video/3gpp"], ["mp4", "video/mp4"],
+  ["mov", "video/quicktime"], ["webm", "video/webm"], ["mkv", "video/x-matroska"],
+]);
+
+const SEM_INFORMACAO = new Set(["", "application/octet-stream", "binary/octet-stream"]);
+
+/**
+ * Mimetype efetivo de um upload: o declarado, ou o da extensão quando o
+ * navegador não soube dizer. Devolve "" quando não dá para saber — o caller
+ * decide o padrão.
+ */
+export function mimeDeUpload(mimeType, filename) {
+  const limpo = cleanMime(mimeType);
+  if (!SEM_INFORMACAO.has(limpo)) return limpo;
+  const ext = String(filename || "").split(".").pop()?.toLowerCase() || "";
+  return MIME_POR_EXTENSAO.get(ext) || limpo;
+}
 
 // Tipos que o navegador EXECUTA. Nunca inline, em nenhuma hipótese.
 const EXECUTAVEIS = new Set([

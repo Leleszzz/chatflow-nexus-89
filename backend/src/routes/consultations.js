@@ -4,7 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { config } from "../config.js";
-import { saveMedia, resolveMediaPath } from "../storage/media-repo.js";
+import { saveMedia, resolveMediaPath, MAX_MEDIA_BYTES } from "../storage/media-repo.js";
+import { mimeDeUpload } from "../lib/media-safety.js";
 import {
   listConsultations,
   getConsultation,
@@ -27,10 +28,14 @@ import { summarizeConsultation } from "../lib/transcription/summary.js";
 import { mergeSuggestions, SUGGESTION_STATUS } from "../lib/transcription/suggestions.js";
 import { renderTranscript, buildSpeakers } from "../lib/transcription/render.js";
 
-// 200 MB cobre uma consulta de várias horas gravada em WebM pelo navegador.
 // Caminho ABSOLUTO: "data/uploads" é relativo ao diretório de onde o processo
 // foi iniciado, então iniciar o servidor de outro lugar espalhava temporários.
-const upload = multer({ dest: config.paths.uploadsDir, limits: { fileSize: 200 * 1024 * 1024 } });
+//
+// O teto é o MESMO de saveMedia. Antes o multer aceitava 200 MB e o
+// `saveMedia` recusava acima de 100 MB: o upload subia inteiro, demorava, e só
+// então falhava — o pior dos dois mundos. Agora quem estoura é barrado no
+// começo, com a mensagem certa.
+const upload = multer({ dest: config.paths.uploadsDir, limits: { fileSize: MAX_MEDIA_BYTES } });
 
 export const consultationsRouter = Router();
 
@@ -187,17 +192,23 @@ consultationsRouter.post("/upload", upload.single("file"), async (req, res) => {
     const recordedAt = req.body?.recordedAt || new Date().toISOString();
     const durationSec = Number(req.body?.durationSec) || 0;
 
+    // Gravação do navegador sempre manda o mime; arquivo importado de celular
+    // ou do Windows às vezes vem sem nenhum, ou como octet-stream — aí vale a
+    // extensão do nome. Sem isso o arquivo virava .bin e não tocava na tela.
+    const mime = mimeDeUpload(req.file.mimetype, req.file.originalname) || "audio/webm";
     const buffer = await fs.readFile(req.file.path);
-    const saved = await saveMedia(buffer, req.file.mimetype || "audio/webm");
+    const saved = await saveMedia(buffer, mime);
 
     // Espelho no prontuário: o áudio da consulta tem que aparecer junto com os
-    // outros anexos do cliente, e não só na tela nova.
+    // outros anexos do cliente, e não só na tela nova. A categoria vem do mime
+    // porque uma consulta importada pode ser um vídeo — rotular tudo de "audio"
+    // deixaria o prontuário mentindo sobre o que é o anexo.
     const anexo = await createProntuario({
       dealId,
       name: title,
       mediaUrl: saved.url,
       mediaMime: saved.mimeType,
-      category: "audio",
+      category: saved.mimeType.startsWith("video/") ? "video" : "audio",
       fileSize: req.file.size,
       source: "upload",
       uploadedBy: req.user.id,

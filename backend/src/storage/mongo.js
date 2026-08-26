@@ -58,6 +58,7 @@ export const collections = {
   agents: "agents",
   tags: "tags",
   appointments: "appointments",
+  tasks: "tasks",
   dealOutcomes: "deal_outcomes",
   auditoria: "auditoria",
   agentLocks: "agent_locks",
@@ -82,6 +83,11 @@ async function ensureIndexes() {
     getCol(collections.leadList).createIndex({ importadoEm: -1 }),
     // Kanban e agenda ordenam/filtram por última interação.
     getCol(collections.deals).createIndex({ lastInteraction: -1 }),
+    // Fila da secretaria: a tela abre em "abertas" e filtra por responsável.
+    getCol(collections.tasks).createIndex({ status: 1, criadoEm: -1 }),
+    getCol(collections.tasks).createIndex({ assigneeId: 1, status: 1 }),
+    // Cascade ao excluir um card.
+    getCol(collections.tasks).createIndex({ dealId: 1 }),
     // Trilha de auditoria: consulta por usuario e por acao, com expiracao
     // automatica em 2 anos para o log nao crescer sem fim.
     getCol(collections.auditoria).createIndex({ em: -1 }),

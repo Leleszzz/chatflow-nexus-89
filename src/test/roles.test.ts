@@ -78,6 +78,7 @@ describe("canRoleAccess", () => {
     "/calendario": [ROLES.ADMIN, ROLES.DOUTOR, ROLES.SECRETARIA],
     "/relatorios": [ROLES.ADMIN, ROLES.DOUTOR, ROLES.SECRETARIA],
     "/kanban": [ROLES.ADMIN, ROLES.SECRETARIA],
+    "/secretaria": [ROLES.ADMIN, ROLES.SECRETARIA, ROLES.DOUTOR],
     "/prontuarios": [ROLES.ADMIN, ROLES.DOUTOR],
     "/consultas": [ROLES.ADMIN, ROLES.DOUTOR],
     "/agentes": [ROLES.ADMIN],

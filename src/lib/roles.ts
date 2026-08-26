@@ -121,6 +121,9 @@ export const ROUTE_ROLES: Record<string, Role[]> = {
   "/calendario": TODOS,
   "/relatorios": TODOS,
   "/kanban": [ROLES.ADMIN, ROLES.SECRETARIA],
+  // A fila da recepção. O doutor entra para acompanhar o que delegou — ele
+  // não executa a fila, mas sem enxergá-la voltaria a cobrar por fora.
+  "/secretaria": [ROLES.ADMIN, ROLES.SECRETARIA, ROLES.DOUTOR],
   "/prontuarios": [ROLES.ADMIN, ROLES.DOUTOR],
   "/consultas": [ROLES.ADMIN, ROLES.DOUTOR],
   "/agentes": [ROLES.ADMIN],

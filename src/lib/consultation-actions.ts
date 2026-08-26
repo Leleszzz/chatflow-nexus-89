@@ -14,6 +14,14 @@ export type AgendarRetornoPayload = { data: string; hora: string; motivo: string
 export type ExamesPayload = { itens: string[] };
 export type TextoPayload = { texto: string };
 
+/** O que a sugestão vira quando o doutor delega para a recepção. */
+export type RascunhoDeTarefa = {
+  titulo: string;
+  descricao: string;
+  itens: string[];
+  mensagemSugerida: string;
+};
+
 export type AcaoDef = {
   rotulo: string;
   icone: LucideIcon;
@@ -21,6 +29,15 @@ export type AcaoDef = {
   resumo: (payload: Record<string, unknown>) => string;
   /** Precisa de conversa no WhatsApp para funcionar? */
   exigeWhatsApp: boolean;
+  /**
+   * Como esta ação vira tarefa da secretaria.
+   *
+   * Está no registro, e não num tipo novo de sugestão, porque pedir à IA para
+   * distinguir "mandar a lista de exames" de "cobrar a lista de exames"
+   * produziria classificação ruim — é a mesma leitura da consulta, com dois
+   * destinos possíveis. Tipo novo de sugestão ganha delegação de graça.
+   */
+  tarefa: (payload: Record<string, unknown>, ctx: { nome: string }) => RascunhoDeTarefa;
 };
 
 export const ACOES: Record<ConsultationSuggestionType, AcaoDef> = {
@@ -33,6 +50,16 @@ export const ACOES: Record<ConsultationSuggestionType, AcaoDef> = {
       const quando = data ? `${formatarDataBR(data)}${hora ? ` às ${hora}` : ""}` : "sem data definida";
       return motivo ? `${quando} — ${motivo}` : quando;
     },
+    tarefa: (p, { nome }) => {
+      const { data, hora, motivo } = p as AgendarRetornoPayload;
+      const quando = data ? `${formatarDataBR(data)}${hora ? ` às ${hora}` : ""}` : "data a combinar";
+      return {
+        titulo: `Agendar retorno — ${nome}`.trim(),
+        descricao: [`Retorno combinado na consulta (${quando}).`, motivo].filter(Boolean).join(" "),
+        itens: [],
+        mensagemSugerida: textoConfirmacao({ nome, data, hora }),
+      };
+    },
   },
   exames: {
     rotulo: "Solicitar exames",
@@ -42,18 +69,39 @@ export const ACOES: Record<ConsultationSuggestionType, AcaoDef> = {
       const itens = (p as ExamesPayload).itens || [];
       return `${itens.length} exame${itens.length === 1 ? "" : "s"}: ${itens.join(", ")}`;
     },
+    tarefa: (p, { nome }) => {
+      const itens = (p as ExamesPayload).itens || [];
+      return {
+        titulo: `Cobrar exames — ${nome}`.trim(),
+        descricao: "Acompanhar a entrega dos exames solicitados na consulta e marcar cada um ao receber.",
+        itens,
+        mensagemSugerida: textoCobrancaExames({ nome, itens }),
+      };
+    },
   },
   confirmacao: {
     rotulo: "Confirmar pelo WhatsApp",
     icone: MessageCircle,
     exigeWhatsApp: true,
     resumo: p => (p as TextoPayload).texto || "",
+    tarefa: (p, { nome }) => ({
+      titulo: `Confirmar com ${nome}`.trim(),
+      descricao: "Confirmar com o paciente o que ficou combinado na consulta.",
+      itens: [],
+      mensagemSugerida: textoConfirmacaoLivre({ nome, texto: (p as TextoPayload).texto || "" }),
+    }),
   },
   orientacoes: {
     rotulo: "Enviar orientações",
     icone: HeartPulse,
     exigeWhatsApp: true,
     resumo: p => (p as TextoPayload).texto || "",
+    tarefa: (p, { nome }) => ({
+      titulo: `Enviar orientações — ${nome}`.trim(),
+      descricao: "Repassar ao paciente as orientações combinadas na consulta.",
+      itens: [],
+      mensagemSugerida: textoOrientacoes({ nome, texto: (p as TextoPayload).texto || "" }),
+    }),
   },
 };
 
@@ -111,6 +159,20 @@ export function textoConfirmacaoLivre({ nome, texto, agora }: {
   nome: string; texto: string; agora?: Date;
 }): string {
   return `${abertura(nome, agora)} ${texto.trim()}`;
+}
+
+/**
+ * Cobrança dos exames que o paciente ainda não trouxe.
+ *
+ * Deliberadamente diferente de `textoExames`: aquele entrega a lista na hora da
+ * consulta, este cobra dias depois. Mandar o mesmo texto duas vezes faria o
+ * paciente achar que a solicitação foi repetida por engano.
+ */
+export function textoCobrancaExames({ nome, itens, agora }: {
+  nome: string; itens: string[]; agora?: Date;
+}): string {
+  const lista = itens.map(i => `• ${i}`).join("\n");
+  return `${abertura(nome, agora)} Passando para saber se já conseguiu fazer os exames solicitados na sua consulta:\n\n${lista}\n\nAssim que tiver os resultados, é só mandar por aqui.`;
 }
 
 export type QuandoLembrete = "vespera" | "duas-horas";

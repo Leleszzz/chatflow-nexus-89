@@ -123,3 +123,47 @@ describe("registro de ações", () => {
     expect(ACOES.orientacoes.exigeWhatsApp).toBe(true);
   });
 });
+
+describe("delegar a sugestão para a secretaria", () => {
+  it("exames viram checklist, com texto de COBRANÇA e não de solicitação", () => {
+    const t = ACOES.exames.tarefa({ itens: ["Hemograma completo", "TSH"] }, { nome: "Maria Silva" });
+    expect(t.titulo).toBe("Cobrar exames — Maria Silva");
+    expect(t.itens).toEqual(["Hemograma completo", "TSH"]);
+    // O paciente já recebeu a lista na consulta; repetir o mesmo texto dias
+    // depois pareceria solicitação duplicada.
+    expect(t.mensagemSugerida).toContain("já conseguiu fazer os exames");
+    expect(t.mensagemSugerida).toContain("• Hemograma completo\n• TSH");
+  });
+
+  it("retorno com data leva a data no título e na mensagem", () => {
+    const t = ACOES.agendar_retorno.tarefa(
+      { data: "2026-09-03", hora: "14:00", motivo: "reavaliar pressão" },
+      { nome: "João Pedro" },
+    );
+    expect(t.titulo).toBe("Agendar retorno — João Pedro");
+    expect(t.descricao).toContain("03/09 às 14:00");
+    expect(t.descricao).toContain("reavaliar pressão");
+    expect(t.mensagemSugerida).toContain("03/09");
+  });
+
+  it("retorno sem data não inventa uma", () => {
+    const t = ACOES.agendar_retorno.tarefa({ data: "", hora: "", motivo: "" }, { nome: "Ana" });
+    expect(t.descricao).toContain("data a combinar");
+    expect(t.mensagemSugerida).not.toContain("undefined");
+  });
+
+  it("confirmação e orientações repassam o texto que a IA redigiu", () => {
+    const conf = ACOES.confirmacao.tarefa({ texto: "Seu retorno ficou para dia 3." }, { nome: "Ana" });
+    expect(conf.mensagemSugerida).toContain("Seu retorno ficou para dia 3.");
+    expect(conf.itens).toEqual([]);
+
+    const ori = ACOES.orientacoes.tarefa({ texto: "Beber 2L de água por dia." }, { nome: "Ana" });
+    expect(ori.mensagemSugerida).toContain("Beber 2L de água por dia.");
+  });
+
+  it("todo tipo de ação sabe virar tarefa — delegação não fica de fora de nenhum", () => {
+    Object.entries(ACOES).forEach(([tipo, def]) => {
+      expect(typeof def.tarefa, `${tipo} sem construtor de tarefa`).toBe("function");
+    });
+  });
+});

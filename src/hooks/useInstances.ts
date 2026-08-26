@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { whatsappApi, WhatsAppInstance, InstanceStatus, HistorySyncMode } from "@/lib/whatsapp-api";
+import { InstanceKind } from "@/lib/instance-kinds";
 import { getSocket } from "@/lib/whatsapp-socket";
 import { mensagemDeErro } from "@/lib/erros";
 
@@ -93,8 +94,8 @@ export function useInstances() {
     };
   }, [instances.length]);
 
-  const createInstance = useCallback(async (name: string, historySync: HistorySyncMode = "recent") => {
-    const created = await whatsappApi.createInstance(name, historySync);
+  const createInstance = useCallback(async (name: string, historySync: HistorySyncMode = "recent", tipo?: InstanceKind) => {
+    const created = await whatsappApi.createInstance(name, historySync, tipo);
     setInstances(curr => [...curr, created]);
     getSocket().emit("join", created.id);
     return created;
@@ -140,6 +141,14 @@ export function useInstances() {
     return updated;
   }, []);
 
+  // Número do doutor ou da recepção — decide por onde a secretaria cobra e a
+  // quem aparece o botão de falar pelo WhatsApp próprio.
+  const setInstanceKind = useCallback(async (id: string, tipo: InstanceKind) => {
+    const updated = await whatsappApi.updateInstance(id, { tipo });
+    setInstances(curr => curr.map(i => i.id === id ? { ...i, ...updated } : i));
+    return updated;
+  }, []);
+
   const fetchQr = useCallback(async (id: string) => {
     try {
       const { qr } = await whatsappApi.getQr(id);
@@ -157,5 +166,5 @@ export function useInstances() {
     return code;
   }, []);
 
-  return { instances, loading, error, qrByInstance, pairingCodeByInstance, refresh, createInstance, restartInstance, resyncHistory, deleteInstance, fetchQr, requestPairingCode, renameInstance, setInstanceOwner };
+  return { instances, loading, error, qrByInstance, pairingCodeByInstance, refresh, createInstance, restartInstance, resyncHistory, deleteInstance, fetchQr, requestPairingCode, renameInstance, setInstanceOwner, setInstanceKind };
 }

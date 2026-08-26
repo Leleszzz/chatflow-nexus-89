@@ -22,13 +22,16 @@ import { toast } from "sonner";
 import { useWhatsAppConversations, useWhatsAppMessages } from "@/hooks/useWhatsAppConversations";
 import { whatsappApi, LeadListEntry, QuickReply, ScheduledMessage, WAConversation, WAMessage, WhatsAppInstance } from "@/lib/whatsapp-api";
 import { renderTemplate } from "@/lib/message-template";
+import { instanciaPropria } from "@/lib/instance-kinds";
+import { QuickReplyPicker } from "@/components/chat/QuickReplyPicker";
+import { CriarTarefaDialog } from "@/components/tarefas/CriarTarefaDialog";
 import { phoneKey } from "@/lib/telefone";
 import { Label } from "@/components/ui/label";
 import { AudioMessage } from "@/components/chat/AudioMessage";
 import { ImageViewer } from "@/components/chat/ImageViewer";
 import { RecordingWaveform } from "@/components/chat/RecordingWaveform";
 import { SchedulingProposalBar } from "@/components/chat/SchedulingProposalBar";
-import { isAtendente } from "@/lib/roles";
+import { isAtendente, seesAllDeals } from "@/lib/roles";
 import { mensagemDeErro } from "@/lib/erros";
 
 type Conversation = {
@@ -277,6 +280,7 @@ export default function Conversas() {
   const [newConversationPhone, setNewConversationPhone] = useState("");
   const [newConversationName, setNewConversationName] = useState("");
   const [startingConversation, setStartingConversation] = useState(false);
+  const [tarefaAberta, setTarefaAberta] = useState(false);
   const [prontuarioTarget, setProntuarioTarget] = useState<WAMessage | null>(null);
   const [prontuarioName, setProntuarioName] = useState("");
   const [linkingProntuario, setLinkingProntuario] = useState(false);
@@ -346,16 +350,22 @@ export default function Conversas() {
   // eram recalculadas do zero a cada render — inclusive a cada TECLA digitada na
   // busca. São cinco varreduras completas da lista, e o loop de `statusCounts` é
   // O(n x filtros). Com alguns milhares de conversas, digitar travava a tela.
+  // `seesAllDeals` (admin + secretária) e não `isAdmin`: é a mesma regra que o
+  // backend aplica em canUserSeeDeal, e a tela estava mais restrita que a API.
+  // Na prática a secretária não enxergava a conversa de um paciente do doutor —
+  // então "Abrir conversa" a partir da fila de tarefas caía no chat errado, e o
+  // atalho ?deal= do Kanban também.
+  const veTodasAsConversas = seesAllDeals(currentUser?.role);
   const conversations = useMemo(
     () => inboxConversations
       .filter(conversation =>
-        isAdmin ||
+        veTodasAsConversas ||
         conversation.sellerId === currentUser?.id ||
         conversation.assignedSellerIds?.includes(currentUser?.id || "") ||
         conversation.tags.some(tag => currentUser?.allowedTags?.includes(tag))
       )
       .sort((a, b) => tsValue(b.lastInteraction) - tsValue(a.lastInteraction)),
-    [inboxConversations, isAdmin, currentUser?.id, currentUser?.allowedTags],
+    [inboxConversations, veTodasAsConversas, currentUser?.id, currentUser?.allowedTags],
   );
 
   const initialSelectedId = initialDealId
@@ -457,16 +467,6 @@ export default function Conversas() {
     return groups;
   }, [waMessages]);
 
-  // Mensagens pré-configuradas (Configurações > Mensagens rápidas).
-  const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
-  const [quickOpen, setQuickOpen] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    whatsappApi.listQuickReplies()
-      .then(list => { if (!cancelled) setQuickReplies(list); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
 
   // Observações da lista de leads importada (Configurações > Lista de leads).
   // Casa pelo telefone; se a conversa ainda não tem número (chat @lid), usa o
@@ -832,6 +832,12 @@ export default function Conversas() {
     });
   };
 
+  // O WhatsApp pessoal do doutor: marcado como "doutor" E com ele de
+  // responsável. Sem o tipo, a secretária ganharia o botão apontando para o
+  // número compartilhado da recepção.
+  const minhaInstancia = instanciaPropria(instancesList, currentUser?.id);
+  const jaEstaNaMinhaInstancia = Boolean(minhaInstancia && selected?.instanceId === minhaInstancia.id);
+
   const startConversation = async (params?: { instanceId?: string; phone?: string; customer?: string }) => {
     const instanceId = params?.instanceId || (newConversationOpen ? newConversationInstanceId : selected?.instanceId || newConversationInstanceId);
     const phone = (params?.phone || newConversationPhone).trim();
@@ -854,11 +860,45 @@ export default function Conversas() {
       setNewConversationPhone("");
       setNewConversationName("");
       toast.success("Conversa pronta para atendimento");
+      return conversation;
     } catch (err) {
       toast.error(`Não foi possível iniciar: ${mensagemDeErro(err)}`);
+      return null;
     } finally {
       setStartingConversation(false);
     }
+  };
+
+  /**
+   * Puxa o mesmo paciente para o WhatsApp pessoal do doutor.
+   *
+   * `POST /start` é idempotente: se ele já falou com o paciente por este número,
+   * a conversa existente volta intacta e a tela só troca de aba.
+   */
+  const falarPeloMeuWhatsApp = async () => {
+    if (!selected || !minhaInstancia) return;
+    if (!selected.phone) {
+      toast.error("Esta conversa não tem telefone — abra pelo número do paciente.");
+      return;
+    }
+    const conversa = await startConversation({
+      instanceId: minhaInstancia.id,
+      phone: selected.phone,
+      customer: selected.customer,
+    });
+    if (!conversa) return;
+
+    // Sem isto o doutor clicaria e nada pareceria acontecer: conversa recém-criada
+    // não tem overlay de CRM, fica com `sellerId` vazio, e o filtro de não-admin
+    // logo acima a descarta da lista — `setSelectedId` apontaria para um id que
+    // não existe mais na tela. O patch ainda leva o vínculo com o card junto.
+    setConversationPatch(conversa.id, {
+      dealId: selected.dealId,
+      customer: selected.customer,
+      sellerId: currentUser?.id,
+      tags: selected.tags,
+      stage: selected.stage,
+    });
   };
 
   const openNewConversationDialog = () => {
@@ -870,19 +910,11 @@ export default function Conversas() {
 
   // Insere a mensagem pré-configurada no compositor com as variáveis já
   // resolvidas. Não envia direto: dá para revisar/editar antes.
-  const applyQuickReply = (qr: QuickReply) => {
-    if (!selected) return;
-    const texto = renderTemplate(qr.corpo, {
-      nome: selected.customer,
-      nomeWhatsapp: selected.whatsappName,
-      telefone: selected.phone,
-      listaNome: leadInfo?.nome,
-      listaCpf: leadInfo?.documento,
-      listaTelefone: leadInfo?.telefone,
-      atendente: currentUser?.name,
-    });
-    setDraftMessage(cur => (cur.trim() ? `${cur.trimEnd()}\n${texto}` : texto));
-    setQuickOpen(false);
+  // O texto entra no rascunho em vez de sair direto: a mensagem rápida quase
+  // sempre precisa de um ajuste antes de ir para o paciente.
+  const applyQuickReply = (texto: string) => {
+    setDraftMessage(cur => (cur.trim() ? `${cur.trimEnd()}
+${texto}` : texto));
     requestAnimationFrame(() => {
       const ta = messageInputRef.current;
       if (!ta) return;
@@ -1556,6 +1588,20 @@ export default function Conversas() {
                     )}
                   </div>
                 </div>
+                {minhaInstancia && !jaEstaNaMinhaInstancia && selected.phone && (
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={falarPeloMeuWhatsApp}
+                    disabled={startingConversation}
+                    title={`Continuar com este paciente pelo ${minhaInstancia.name}`}
+                  >
+                    {startingConversation
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Smartphone className="h-4 w-4" />}
+                    Falar pelo meu WhatsApp
+                  </Button>
+                )}
                 <Button variant="outline" className="gap-2" onClick={() => navigate(`/calendario?deal=${selected.dealId || ""}&lead=${encodeURIComponent(selected.customer)}&phone=${encodeURIComponent(selected.phone)}`)}>
                   <CalendarClock className="h-4 w-4" /> Agendar Atendimento
                 </Button>
@@ -1584,6 +1630,9 @@ export default function Conversas() {
                     </button>
                     <button onClick={openScheduleDialog} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-secondary">
                       <CalendarClock className="h-4 w-4 text-primary" /> Agendamentos de mensagens
+                    </button>
+                    <button onClick={() => setTarefaAberta(true)} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-secondary">
+                      <ClipboardList className="h-4 w-4 text-muted-foreground" /> Criar tarefa para a secretaria
                     </button>
                     {isAdmin && (
                       <>
@@ -1861,44 +1910,19 @@ export default function Conversas() {
                           </button>
                         </PopoverContent>
                       </Popover>
-                      <Popover open={quickOpen} onOpenChange={setQuickOpen}>
-                        <PopoverTrigger asChild>
-                          <Button variant="ghost" size="icon" title="Mensagens rápidas" disabled={sending}>
-                            <MessageSquareText className="h-4 w-4" />
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent align="start" side="top" className="w-80 p-1">
-                          {quickReplies.length === 0 ? (
-                            <div className="p-3 text-center text-xs text-muted-foreground">
-                              Nenhuma mensagem criada.<br />
-                              Crie em Configurações &gt; Mensagens rápidas.
-                            </div>
-                          ) : (
-                            <div className="max-h-72 overflow-y-auto">
-                              {quickReplies.map(qr => (
-                                <button
-                                  key={qr.id}
-                                  onClick={() => applyQuickReply(qr)}
-                                  className="flex w-full flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left hover:bg-secondary"
-                                >
-                                  <span className="text-sm font-medium">{qr.titulo}</span>
-                                  <span className="line-clamp-2 text-xs text-muted-foreground">
-                                    {renderTemplate(qr.corpo, {
-                                      nome: selected.customer,
-                                      nomeWhatsapp: selected.whatsappName,
-                                      telefone: selected.phone,
-                                      listaNome: leadInfo?.nome,
-                                      listaCpf: leadInfo?.documento,
-                                      listaTelefone: leadInfo?.telefone,
-                                      atendente: currentUser?.name,
-                                    })}
-                                  </span>
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </PopoverContent>
-                      </Popover>
+                      <QuickReplyPicker
+                        disabled={sending}
+                        contexto={{
+                          nome: selected.customer,
+                          nomeWhatsapp: selected.whatsappName,
+                          telefone: selected.phone,
+                          listaNome: leadInfo?.nome,
+                          listaCpf: leadInfo?.documento,
+                          listaTelefone: leadInfo?.telefone,
+                          atendente: currentUser?.name,
+                        }}
+                        onEscolher={applyQuickReply}
+                      />
                       <Button variant="ghost" size="icon" title="Gravar áudio" onClick={startRecording} disabled={sending}>
                         <Mic className="h-4 w-4" />
                       </Button>
@@ -2431,6 +2455,15 @@ export default function Conversas() {
           )}
         </DialogContent>
       </Dialog>
+
+      {selected && (
+        <CriarTarefaDialog
+          open={tarefaAberta}
+          onOpenChange={setTarefaAberta}
+          nomePaciente={selected.customer}
+          rascunho={{ dealId: selected.dealId, origem: "conversa" }}
+        />
+      )}
     </AppLayout>
   );
 }

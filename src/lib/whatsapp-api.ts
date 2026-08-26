@@ -15,6 +15,8 @@ export type WhatsAppInstance = {
   name: string;
   /** Usuário responsável. `null` = sem dono: só o admin enxerga. */
   ownerId?: string | null;
+  /** O que a instância é no consultório — ver src/lib/instance-kinds.ts. */
+  tipo?: "doutor" | "secretaria";
   phone: string;
   status: InstanceStatus;
   lastSync: string;
@@ -110,6 +112,33 @@ export type ConsultationSpeaker = {
   key: string;
   label: string;
   role: SpeakerRole;
+};
+
+export type TaskStatus = "aberta" | "concluida" | "cancelada";
+export type TaskOrigem = "consulta" | "conversa" | "kanban" | "manual";
+
+export type TaskItem = { texto: string; feito: boolean };
+
+/** Subtarefa da recepção — o doutor delega, a secretária executa. */
+export type Task = {
+  id: string;
+  titulo: string;
+  descricao: string;
+  dealId: string;
+  consultationId: string;
+  /** "" = fila geral, sem dono. */
+  assigneeId: string;
+  status: TaskStatus;
+  /** "AAAA-MM-DD" ou "" quando não há prazo. */
+  prazo: string;
+  itens: TaskItem[];
+  mensagemSugerida: string;
+  origem: TaskOrigem;
+  criadoPor: string;
+  criadoEm: string;
+  atualizadoEm: string;
+  concluidaEm: string;
+  concluidaPor: string;
 };
 
 export type ConsultationSuggestionType = "agendar_retorno" | "exames" | "confirmacao" | "orientacoes";
@@ -365,10 +394,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const whatsappApi = {
   listInstances: () => request<WhatsAppInstance[]>("/api/instances"),
-  createInstance: (name: string, historySync: HistorySyncMode = "recent") =>
-    request<WhatsAppInstance>("/api/instances", { method: "POST", body: JSON.stringify({ name, historySync }) }),
+  createInstance: (name: string, historySync: HistorySyncMode = "recent", tipo?: "doutor" | "secretaria") =>
+    request<WhatsAppInstance>("/api/instances", { method: "POST", body: JSON.stringify({ name, historySync, tipo }) }),
   getInstance: (id: string) => request<WhatsAppInstance>(`/api/instances/${encodeURIComponent(id)}`),
-  updateInstance: (id: string, patch: { name?: string; ownerId?: string | null }) =>
+  updateInstance: (id: string, patch: { name?: string; ownerId?: string | null; tipo?: "doutor" | "secretaria" }) =>
     request<WhatsAppInstance>(`/api/instances/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
@@ -498,9 +527,30 @@ export const whatsappApi = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
-  /** A conversa de WhatsApp vinculada a um card. 404 quando o cliente ainda não tem conversa. */
-  getConversationByDeal: (dealId: string) =>
-    request<WAConversation>(`/api/conversations/by-deal/${encodeURIComponent(dealId)}`),
+  /**
+   * A conversa de WhatsApp vinculada a um card. 404 quando o cliente ainda não
+   * tem conversa. `instanceId` fixa o número — é como a fila da secretaria
+   * garante que a cobrança sai pelo WhatsApp da clínica.
+   */
+  getConversationByDeal: (dealId: string, instanceId?: string) =>
+    request<WAConversation>(
+      `/api/conversations/by-deal/${encodeURIComponent(dealId)}${instanceId ? `?instanceId=${encodeURIComponent(instanceId)}` : ""}`,
+    ),
+
+  listTasks: (params: { status?: TaskStatus; assigneeId?: string; dealId?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set("status", params.status);
+    if (params.assigneeId) qs.set("assigneeId", params.assigneeId);
+    if (params.dealId) qs.set("dealId", params.dealId);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return request<Task[]>(`/api/tasks${suffix}`);
+  },
+  createTask: (task: Partial<Task>) =>
+    request<Task>("/api/tasks", { method: "POST", body: JSON.stringify(task) }),
+  updateTask: (id: string, patch: Partial<Task>) =>
+    request<Task>(`/api/tasks/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteTask: (id: string) =>
+    request<{ ok: true }>(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }),
   startConversation: (payload: { instanceId: string; phone: string; customer?: string }) =>
     request<WAConversation>("/api/conversations/start", {
       method: "POST",
