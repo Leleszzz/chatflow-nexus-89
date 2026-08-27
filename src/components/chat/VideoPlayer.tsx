@@ -117,7 +117,7 @@ export function VideoPlayer({ src, className, autoPlay = false }: Props) {
       ref={containerRef}
       className={cn(
         "group relative flex items-center justify-center bg-black",
-        fullscreen ? "h-screen w-screen" : "overflow-hidden rounded-lg",
+        fullscreen ? "h-dvh w-screen" : "overflow-hidden rounded-lg",
         className,
       )}
       onMouseMove={showControls}

@@ -13,6 +13,7 @@ import { MessageSquare, ShieldCheck, Smartphone, Tags } from "lucide-react";
 import { toast } from "sonner";
 import { ROLES, roleLabel, isAdminRole, type Role } from "@/lib/roles";
 import { mensagemDeErro } from "@/lib/erros";
+import { ResponsiveTable } from "@/components/shared/ResponsiveTable";
 
 const ROLE_PROFILES: { name: string; role: Role; desc: string }[] = [
   { name: "Administrador", role: ROLES.ADMIN, desc: "Acesso total: usuários, instâncias, agentes e configurações. Não tem WhatsApp próprio." },
@@ -26,6 +27,8 @@ export default function Usuarios() {
   const configurableUsers = useMemo(() => teamUsers.filter(user => !isAdminRole(user.role)), [teamUsers]);
   const [selectedUserId, setSelectedUserId] = useState(configurableUsers[0]?.id || "");
   const selectedUser = teamUsers.find(user => user.id === selectedUserId) || configurableUsers[0];
+  const dealsDoUsuario = (userId: string) =>
+    deals.filter(deal => [deal.sellerId, ...(deal.assignedSellerIds || [])].includes(userId));
 
   const patchSelectedUser = async (patch: Partial<typeof selectedUser>) => {
     if (!selectedUser) return;
@@ -91,46 +94,35 @@ export default function Usuarios() {
           <h2 className="font-display text-base font-bold">Lista de usuários</h2>
           <p className="text-xs text-muted-foreground">Status, último acesso, conversas atribuídas e vendas realizadas.</p>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b text-left text-xs uppercase text-muted-foreground">
-                <th className="px-5 py-3 font-semibold">Nome</th>
-                <th className="px-5 py-3 font-semibold">E-mail</th>
-                <th className="px-5 py-3 font-semibold">Cargo</th>
-                <th className="px-5 py-3 font-semibold">Status</th>
-                <th className="px-5 py-3 font-semibold">Último acesso</th>
-                <th className="px-5 py-3 font-semibold">Conversas</th>
-                <th className="px-5 py-3 font-semibold">Vendas</th>
-              </tr>
-            </thead>
-            <tbody>
-              {teamUsers.map(user => {
-                const userDeals = deals.filter(deal => [deal.sellerId, ...(deal.assignedSellerIds || [])].includes(user.id));
-                return (
-                  <tr key={user.id} className="border-b border-border/40">
-                    <td className="px-5 py-3 font-medium">{user.name}</td>
-                    <td className="px-5 py-3 text-muted-foreground">{user.email}</td>
-                    <td className="px-5 py-3">{roleLabel(user.role)}</td>
-                    <td className="px-5 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${user.active ? "bg-success-soft text-success" : "bg-muted text-muted-foreground"}`}>
-                          {user.active ? "Ativo" : "Inativo"}
-                        </span>
-                        {currentUser?.id === user.id && (
-                          <span className="rounded-full bg-primary-soft px-2 py-0.5 text-[10px] font-semibold text-primary">Logado agora</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-5 py-3 text-muted-foreground">{currentUser?.id === user.id ? "Agora" : "—"}</td>
-                    <td className="px-5 py-3">{userDeals.length}</td>
-                    <td className="px-5 py-3">{userDeals.filter(deal => deal.stage === "fechado").length}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <ResponsiveTable
+          rows={teamUsers}
+          rowKey={user => user.id}
+          emptyMessage="Nenhum usuário cadastrado."
+          columns={[
+            { key: "nome", header: "Nome", primary: true, cell: user => <span className="font-medium">{user.name}</span> },
+            { key: "email", header: "E-mail", cell: user => <span className="break-all text-muted-foreground">{user.email}</span> },
+            { key: "cargo", header: "Cargo", cell: user => roleLabel(user.role) },
+            {
+              key: "status",
+              header: "Status",
+              cell: user => (
+                <div className="flex flex-wrap justify-end gap-1 md:justify-start">
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${user.active ? "bg-success-soft text-success" : "bg-muted text-muted-foreground"}`}>
+                    {user.active ? "Ativo" : "Inativo"}
+                  </span>
+                  {currentUser?.id === user.id && (
+                    <span className="rounded-full bg-primary-soft px-2 py-0.5 text-[10px] font-semibold text-primary">Logado agora</span>
+                  )}
+                </div>
+              ),
+            },
+            // "Último acesso" ainda não é registrado (sempre "—" fora do próprio
+            // usuário), então não vale uma linha no card do celular.
+            { key: "acesso", header: "Último acesso", hideOnMobile: true, cell: user => <span className="text-muted-foreground">{currentUser?.id === user.id ? "Agora" : "—"}</span> },
+            { key: "conversas", header: "Conversas", cell: user => dealsDoUsuario(user.id).length },
+            { key: "vendas", header: "Vendas", cell: user => dealsDoUsuario(user.id).filter(deal => deal.stage === "fechado").length },
+          ]}
+        />
       </section>
 
       <section className="card-elevated mb-6 p-6">

@@ -159,7 +159,7 @@ export default function Agentes() {
 
   return (
     <AppLayout title="Agentes de IA" subtitle="Piloto automático para suas conversas">
-      <div className="flex items-center justify-between mb-6">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div className="text-sm text-muted-foreground">{agents.length} agentes configurados · {agents.filter(a => a.active).length} ativos</div>
         <Button onClick={openNew} className="bg-gradient-primary gap-2"><Plus className="w-4 h-4" /> Criar novo agente</Button>
       </div>
@@ -229,7 +229,7 @@ export default function Agentes() {
           </DialogHeader>
           {editing && (
             <Tabs defaultValue="config">
-              <TabsList className="grid grid-cols-5 w-full bg-secondary">
+              <TabsList className="flex w-full justify-start gap-1 bg-secondary sm:grid sm:grid-cols-5">
                 <TabsTrigger value="config">Configuração</TabsTrigger>
                 <TabsTrigger value="prompt">Prompt</TabsTrigger>
                 <TabsTrigger value="rules">Regras</TabsTrigger>
@@ -238,7 +238,7 @@ export default function Agentes() {
               </TabsList>
 
               <TabsContent value="config" className="space-y-4 mt-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div><Label>Nome do agente *</Label><Input value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} /></div>
                   <div><Label>Canal vinculado</Label><Input value={editing.channel} onChange={e => setEditing({ ...editing, channel: e.target.value })} /></div>
                 </div>
@@ -246,7 +246,7 @@ export default function Agentes() {
 
                 <div>
                   <Label className="mb-2 block">Modelo de IA</Label>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                     {MODEL_OPTIONS.map(m => {
                       const selected = normalizeModel(editing.model) === m.id;
                       return (
@@ -276,7 +276,7 @@ export default function Agentes() {
                         <RotateCcw className="w-3 h-3" /> Zerar
                       </Button>
                     </div>
-                    <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="grid grid-cols-1 gap-2 text-center sm:grid-cols-3">
                       <div className="rounded-lg bg-card p-2">
                         <div className="text-[10px] text-muted-foreground">Custo total</div>
                         <div className="text-sm font-bold">{formatUsd(editingUsage.costUsd || 0)}</div>

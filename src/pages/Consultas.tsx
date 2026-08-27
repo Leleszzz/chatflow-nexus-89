@@ -391,7 +391,7 @@ export default function Consultas() {
           onImport={importarArquivo}
         />
 
-        <div className="grid h-[calc(100vh-280px)] min-h-[420px] grid-cols-1 gap-4 lg:grid-cols-[340px_1fr]">
+        <div className="grid grid-cols-1 gap-4 lg:h-[calc(100dvh-var(--topbar-h)-var(--main-pad-y)-14rem)] lg:min-h-[420px] lg:grid-cols-[340px_1fr]">
           {/* Lista de consultas */}
           <aside className="flex min-h-0 flex-col rounded-2xl border border-border bg-card">
             <div className="space-y-2 border-b border-border p-3">

@@ -52,26 +52,29 @@ export function Sidebar({ mobile = false, onClose }: { mobile?: boolean; onClose
     .filter(section => section.items.length > 0);
 
   return (
+    // No mobile quem controla a largura é o SheetContent que envolve isto —
+    // por isso w-full aqui, e não um segundo w-[...] brigando com o w-[248px]
+    // (mesma especificidade: quem vence dependeria da ordem do CSS gerado).
     <aside className={cn(
-      "flex w-[248px] shrink-0 flex-col bg-gradient-sidebar text-sidebar-foreground p-4 h-screen",
-      mobile ? "w-[280px]" : "hidden md:flex sticky top-0",
+      "flex h-dvh shrink-0 flex-col overflow-y-auto bg-gradient-sidebar p-4 text-sidebar-foreground scrollbar-thin",
+      mobile ? "w-full" : "sticky top-0 hidden w-[248px] md:flex",
     )}>
-      <div className="flex items-center gap-2 px-2 py-3 mb-6">
-        <div className="w-9 h-9 rounded-xl bg-white/15 backdrop-blur flex items-center justify-center">
-          <Sparkles className="w-5 h-5" />
+      <div className="mb-6 flex items-center gap-2 px-2 py-3">
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/15 backdrop-blur">
+          <Sparkles className="h-5 w-5" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="font-display font-bold text-base leading-tight">CRM WhatsApp</div>
-          <div className="text-[11px] uppercase tracking-wider text-white/70 font-semibold">Pro</div>
+          <div className="font-display text-base font-bold leading-tight">CRM WhatsApp</div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-white/70">Pro</div>
         </div>
         {mobile && (
-          <Button variant="ghost" size="icon" className="text-white hover:bg-white/10 hover:text-white" onClick={onClose}>
+          <Button variant="ghost" size="icon" className="text-white hover:bg-white/10 hover:text-white" onClick={onClose} aria-label="Fechar menu">
             <X className="h-4 w-4" />
           </Button>
         )}
       </div>
 
-      <nav className="flex flex-col gap-5">
+      <nav className="flex flex-col gap-5 pb-6">
         {visibleSections.map(section => (
           <div key={section.title}>
             <div className="mb-2 px-3 text-[10px] font-bold uppercase tracking-wider text-white/55">{section.title}</div>

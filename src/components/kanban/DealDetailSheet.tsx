@@ -141,13 +141,15 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
           )}
 
           <DialogHeader>
-            <div className="flex items-start justify-between gap-3 pr-8">
+            <div className="flex flex-col items-start gap-3 pr-8 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0 flex-1">
                 <DialogTitle className="font-display flex items-center gap-2">
                   <UserRound className="w-5 h-5 text-primary" /> Detalhes do lead
                 </DialogTitle>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
+              {/* Sem flex-wrap (e com shrink-0) estes quatro botoes somavam
+                  ~460px dentro de um dialogo de 327px no celular. */}
+              <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
                 <Button
                   size="sm"
                   variant="outline"
@@ -239,7 +241,7 @@ export function DealDetailSheet({ deal, open, onOpenChange, onFinish }: {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <Label>Temperatura</Label>
                 <Select value={deal.temperature} onValueChange={(v) => { updateDeal(deal.id, { temperature: v as Temperature }); toast.success("Temperatura atualizada"); }}>

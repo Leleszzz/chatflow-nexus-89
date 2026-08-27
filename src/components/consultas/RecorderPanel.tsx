@@ -111,7 +111,7 @@ export function RecorderPanel({
         color={gravando ? "hsl(var(--destructive))" : "hsl(var(--muted-foreground))"}
       />
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {gravando ? (
           <Button variant="outline" size="sm" className="gap-2" onClick={onPause}>
             <Pause className="h-4 w-4" /> Pausar

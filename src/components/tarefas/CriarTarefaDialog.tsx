@@ -156,7 +156,7 @@ export function CriarTarefaDialog({ open, onOpenChange, rascunho, nomePaciente, 
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="h-6 w-6 text-muted-foreground"
+                  className="h-9 w-9 text-muted-foreground"
                   onClick={() => setItens(prev => prev.filter(i => i !== item))}
                 >
                   <X className="h-3 w-3" />

@@ -209,7 +209,7 @@ export default function Secretaria() {
             </Button>
           ))}
 
-          <div className="relative min-w-[200px] flex-1">
+          <div className="relative min-w-0 flex-1 basis-full sm:basis-48">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={busca}
@@ -220,7 +220,7 @@ export default function Secretaria() {
           </div>
 
           <Select value={responsavelFiltro} onValueChange={setResponsavelFiltro}>
-            <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-full sm:w-[200px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value={TODOS}>Todos os responsáveis</SelectItem>
               <SelectItem value={SEM_RESPONSAVEL}>Sem responsável</SelectItem>

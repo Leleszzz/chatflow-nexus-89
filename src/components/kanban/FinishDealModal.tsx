@@ -72,7 +72,7 @@ export function FinishDealModal({ deal, open, onOpenChange }: { deal: Deal | nul
           <div>
             <Label className="mb-2 block">Resultado</Label>
             <Tabs value={result} onValueChange={(v) => setResult(v as "venda" | "recusa")}>
-              <TabsList className="grid grid-cols-2 w-full bg-secondary">
+              <TabsList className="grid w-full grid-cols-2 bg-secondary">
                 <TabsTrigger value="venda" className="data-[state=active]:bg-success data-[state=active]:text-success-foreground gap-2">
                   <CheckCircle2 className="w-4 h-4" /> Venda realizada
                 </TabsTrigger>
@@ -85,7 +85,7 @@ export function FinishDealModal({ deal, open, onOpenChange }: { deal: Deal | nul
 
           {result === "venda" ? (
             <div className="space-y-3 animate-fade-in">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                 <Label htmlFor="amount">Valor da venda (R$)</Label>
                   <Input id="amount" type="number" placeholder="0,00" value={amount} onChange={e => setAmount(e.target.value)} />

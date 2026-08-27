@@ -218,7 +218,11 @@ export default function Calendario() {
   const { appointments, addAppointment, updateAppointment, removeAppointment, deals, teamUsers, currentUser, isAdmin, canViewDeal } = useCRM();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [view, setView] = useState<CalendarView>("week");
+  const [view, setView] = useState<CalendarView>(
+    // No celular a semana nao cabe (912px de grade) e o scroll horizontal briga
+    // com o arrastar do dnd-kit — comeca no dia, que e utilizavel no dedo.
+    () => (typeof window !== "undefined" && window.innerWidth < 768 ? "day" : "week"),
+  );
   const [cursor, setCursor] = useState(() => new Date());
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Appointment | null>(null);
@@ -545,7 +549,7 @@ export default function Calendario() {
               </PopoverContent>
             </Popover>
             <Select value={filterType} onValueChange={setFilterType}>
-              <SelectTrigger className="h-9 w-[150px]"><SelectValue placeholder="Tipo" /></SelectTrigger>
+              <SelectTrigger className="h-9 w-full sm:w-[150px]"><SelectValue placeholder="Tipo" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos tipos</SelectItem>
                 {APPOINTMENT_TYPES.map(option => (
@@ -554,7 +558,7 @@ export default function Calendario() {
               </SelectContent>
             </Select>
             <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger className="h-9 w-[150px]"><SelectValue placeholder="Status" /></SelectTrigger>
+              <SelectTrigger className="h-9 w-full sm:w-[150px]"><SelectValue placeholder="Status" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos status</SelectItem>
                 <SelectItem value="agendado">Agendado</SelectItem>
@@ -583,7 +587,7 @@ export default function Calendario() {
         <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragEnd={handleDragEnd}>
         {view === "month" ? (
           <div className="overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
-            <div className="grid grid-cols-7 border-b border-border bg-secondary/40 text-center text-xs font-semibold uppercase text-muted-foreground">
+            <div className="hidden grid-cols-7 border-b border-border bg-secondary/40 text-center text-xs font-semibold uppercase text-muted-foreground sm:grid">
               {["Seg", "Ter", "Qua", "Qui", "Sex", "Sab", "Dom"].map(day => <div key={day} className="p-2">{day}</div>)}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-7">
@@ -624,7 +628,7 @@ export default function Calendario() {
           </div>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-border/70 bg-card shadow-sm scrollbar-thin">
-            <div className="min-w-[760px]">
+            <div className={view === "day" ? "min-w-0" : "min-w-[760px]"}>
               <div
                 className="grid"
                 style={{ gridTemplateColumns: `72px repeat(${view === "day" ? 1 : 7}, minmax(120px, 1fr))` }}

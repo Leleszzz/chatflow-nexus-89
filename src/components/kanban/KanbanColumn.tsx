@@ -21,16 +21,16 @@ export function KanbanColumn({ id, title, count, color, totalValue, canManageSta
   const { setNodeRef, isOver } = useDroppable({ id });
 
   return (
-    <div className="flex h-full min-h-0 w-72 flex-shrink-0 flex-col">
+    <div className="flex h-full min-h-0 w-[85vw] max-w-[18rem] flex-shrink-0 snap-start flex-col sm:w-72">
       <div className={cn("mb-3 rounded-xl border border-border/70 px-3 py-3 shadow-sm", headerClassFor(color))}>
         <div className="relative flex min-h-7 items-center justify-center px-14">
           <h3 className="min-w-0 max-w-full text-center text-sm font-semibold leading-tight truncate">{title}</h3>
           {canManageStages && (
             <div className="absolute right-0 flex justify-end gap-1">
-              <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-current hover:text-current" title="Editar etapa" onClick={onRename}>
+              <Button type="button" size="iconSm" variant="ghost" className="text-current hover:text-current" title="Editar etapa" onClick={onRename}>
                 <Pencil className="h-3.5 w-3.5" />
               </Button>
-              <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-current hover:text-current" title="Remover etapa" onClick={onRemove}>
+              <Button type="button" size="iconSm" variant="ghost" className="text-current hover:text-current" title="Remover etapa" onClick={onRemove}>
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
             </div>

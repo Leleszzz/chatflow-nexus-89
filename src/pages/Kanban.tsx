@@ -233,13 +233,13 @@ export default function Kanban() {
                     )}
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent align="end" className="w-[340px] p-4">
+                <PopoverContent align="end" className="w-[min(340px,calc(100vw-1.5rem))] p-4">
                   <div className="mb-3">
                     <div className="text-sm font-semibold">Filtros do funil</div>
                     <div className="text-xs text-muted-foreground">Refine a visualização dos leads.</div>
                   </div>
                   <div className="grid gap-3">
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
                         <Label className="text-xs">Periodo inicial</Label>
                         <Input type="date" value={filterStart} onChange={event => setFilterStart(event.target.value)} />
@@ -346,7 +346,7 @@ export default function Kanban() {
         <div
           ref={boardRef}
           onWheel={handleBoardWheel}
-          className="flex h-[calc(100vh-13.5rem)] min-h-[420px] gap-4 overflow-x-auto overflow-y-hidden overscroll-x-contain pb-4 scrollbar-thin -mx-6 lg:-mx-8 px-6 lg:px-8"
+          className="app-pane -mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto overflow-y-hidden overscroll-x-contain px-4 pb-4 scrollbar-thin sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8"
         >
           {stages.map(s => (
             <KanbanColumn

@@ -90,7 +90,9 @@ export function AudioMessage({ src, mine = false }: { src: string; mine?: boolea
 
   return (
     <div className={cn(
-      "flex w-[260px] items-center gap-3 rounded-2xl px-3 py-2",
+      // w-full + max-w: fixo em 260px o player estourava a propria bolha
+      // (que e max-w-[85%] do painel de chat) em telas estreitas.
+      "flex w-full max-w-[260px] items-center gap-3 rounded-2xl px-3 py-2",
       mine ? "bg-primary/30" : "bg-secondary",
     )}>
       <audio ref={audioRef} src={src} preload="metadata" />

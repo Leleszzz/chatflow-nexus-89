@@ -12,6 +12,7 @@ import { Download, Play, FileText, Users, Bot, Flame, AlertTriangle, History, Sh
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { isAtendente } from "@/lib/roles";
+import { ResponsiveTable } from "@/components/shared/ResponsiveTable";
 
 const REPORTS = [
   { id: "atendimentos", name: "Atendimentos", desc: "Todos os atendimentos do período", icon: FileText },
@@ -230,9 +231,9 @@ export default function Relatorios() {
 
   return (
     <AppLayout title="Relatórios" subtitle="Filtre e exporte os dados que precisar">
-      <div className="card-elevated p-5 mb-5">
+      <div className="card-elevated mb-5 p-4 sm:p-5">
         <h3 className="font-semibold text-sm mb-3">Filtros</h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
           <div><Label className="text-xs">Período</Label><Select value={period} onValueChange={setPeriod}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>
             <SelectItem value="today">Hoje</SelectItem><SelectItem value="7d">7 dias</SelectItem><SelectItem value="30d">30 dias</SelectItem><SelectItem value="90d">90 dias</SelectItem><SelectItem value="custom">Personalizado</SelectItem>
           </SelectContent></Select></div>
@@ -265,11 +266,11 @@ export default function Relatorios() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-        <div className="card-elevated p-4"><div className="text-xs text-muted-foreground">Resultados</div><div className="text-2xl font-bold">{reportRows.length}</div></div>
-        <div className="card-elevated p-4"><div className="text-xs text-muted-foreground">Valor em carteira</div><div className="text-2xl font-bold">R$ {Math.round(totalValue).toLocaleString("pt-BR")}</div></div>
-        <div className="card-elevated p-4"><div className="text-xs text-muted-foreground">Conversão</div><div className="text-2xl font-bold">{conversion}%</div></div>
-        <div className="card-elevated p-4"><div className="text-xs text-muted-foreground">Ticket médio</div><div className="text-2xl font-bold">R$ {Math.round(avgTicket).toLocaleString("pt-BR")}</div></div>
+      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="card-elevated p-4"><div className="text-xs text-muted-foreground">Resultados</div><div className="text-xl font-bold sm:text-2xl">{reportRows.length}</div></div>
+        <div className="card-elevated p-4"><div className="text-xs text-muted-foreground">Valor em carteira</div><div className="text-xl font-bold sm:text-2xl">R$ {Math.round(totalValue).toLocaleString("pt-BR")}</div></div>
+        <div className="card-elevated p-4"><div className="text-xs text-muted-foreground">Conversão</div><div className="text-xl font-bold sm:text-2xl">{conversion}%</div></div>
+        <div className="card-elevated p-4"><div className="text-xs text-muted-foreground">Ticket médio</div><div className="text-xl font-bold sm:text-2xl">R$ {Math.round(avgTicket).toLocaleString("pt-BR")}</div></div>
       </div>
 
       <section className="card-elevated mb-6 p-5">
@@ -347,35 +348,26 @@ export default function Relatorios() {
             {agentPerformance.length === 0 && <div className="md:col-span-2 xl:col-span-4 py-6 text-center text-sm text-muted-foreground">Nenhum agente cadastrado.</div>}
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead><tr className="text-left text-xs uppercase text-muted-foreground border-b">
-                <th className="py-2.5 font-semibold pr-3">Data</th><th className="py-2.5 font-semibold pr-3">Cliente</th>
-                <th className="py-2.5 font-semibold pr-3">WhatsApp</th><th className="py-2.5 font-semibold pr-3">Vendedora</th>
-                <th className="py-2.5 font-semibold pr-3">Etapa</th><th className="py-2.5 font-semibold pr-3">Temperatura</th>
-                <th className="py-2.5 font-semibold pr-3">Valor</th><th className="py-2.5 font-semibold pr-3">Tags</th>
-              </tr></thead>
-              <tbody>
-                {reportRows.map(d => {
-                  const sellerName = teamUsers.find(s => s.id === d.sellerId)?.name;
-                  const stageName = stages.find(s => s.id === d.stage)?.title;
-                  return (
-                    <tr key={d.id} className="border-b border-border/40 hover:bg-secondary/40">
-                      <td className="py-3 pr-3 text-muted-foreground text-xs">{format(new Date(d.lastInteraction), "dd/MM/yy HH:mm")}</td>
-                      <td className="py-3 pr-3 font-medium truncate max-w-[160px]">{d.customer}</td>
-                      <td className="py-3 pr-3 text-muted-foreground text-xs">{d.phone}</td>
-                      <td className="py-3 pr-3">{sellerName}</td>
-                      <td className="py-3 pr-3 text-xs">{stageName}</td>
-                      <td className="py-3 pr-3"><ClientTemperatureBadge temp={d.temperature} /></td>
-                      <td className="py-3 pr-3 font-semibold">{d.estimatedValue ? `R$ ${d.estimatedValue.toLocaleString("pt-BR")}` : "-"}</td>
-                      <td className="py-3 pr-3"><div className="flex gap-1 flex-wrap">{d.tags.slice(0, 2).map(t => <TagBadge key={t} label={t} />)}</div></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {reportRows.length === 0 && <div className="py-10 text-center text-sm text-muted-foreground">Nenhum registro encontrado para os filtros atuais.</div>}
-          </div>
+          <ResponsiveTable
+            rows={reportRows}
+            rowKey={d => d.id}
+            emptyMessage="Nenhum registro encontrado para os filtros atuais."
+            className="-mx-2"
+            columns={[
+              { key: "cliente", header: "Cliente", primary: true, cell: d => <span className="font-medium">{d.customer}</span> },
+              { key: "data", header: "Data", cell: d => <span className="text-xs text-muted-foreground">{format(new Date(d.lastInteraction), "dd/MM/yy HH:mm")}</span> },
+              { key: "whatsapp", header: "WhatsApp", cell: d => <span className="text-xs text-muted-foreground">{d.phone}</span> },
+              { key: "vendedora", header: "Vendedora", cell: d => teamUsers.find(s => s.id === d.sellerId)?.name },
+              { key: "etapa", header: "Etapa", cell: d => <span className="text-xs">{stages.find(s => s.id === d.stage)?.title}</span> },
+              { key: "temperatura", header: "Temperatura", cell: d => <ClientTemperatureBadge temp={d.temperature} /> },
+              { key: "valor", header: "Valor", cell: d => <span className="font-semibold">{d.estimatedValue ? `R$ ${d.estimatedValue.toLocaleString("pt-BR")}` : "-"}</span> },
+              {
+                key: "tags",
+                header: "Tags",
+                cell: d => <div className="flex flex-wrap justify-end gap-1 md:justify-start">{d.tags.slice(0, 2).map(t => <TagBadge key={t} label={t} />)}</div>,
+              },
+            ]}
+          />
         )}
       </div>
     </AppLayout>

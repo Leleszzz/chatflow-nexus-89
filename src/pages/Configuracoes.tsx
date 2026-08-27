@@ -25,6 +25,7 @@ import { Plus, Trash2, Pencil, KeyRound, Loader2, Upload, FileText, MessageSquar
 import { toast } from "sonner";
 import { ROLES, ROLE_OPTIONS, roleLabel, isAtendente, isSecretariaRole, type Role } from "@/lib/roles";
 import { mensagemDeErro } from "@/lib/erros";
+import { ResponsiveTable } from "@/components/shared/ResponsiveTable";
 
 
 const initialsFromName = (name: string) =>
@@ -468,7 +469,7 @@ export default function Configuracoes() {
             <input ref={accountPhotoInputRef} type="file" accept="image/*" className="hidden" onChange={updateAccountPhoto} />
             <Button variant="outline" onClick={() => accountPhotoInputRef.current?.click()}>Alterar foto</Button>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div><Label>Nome</Label><Input value={accountProfile.name} onChange={event => setAccountProfile({ ...accountProfile, name: event.target.value, avatar: accountProfile.avatar || initialsFromName(event.target.value) })} /></div>
             <div><Label>E-mail</Label><Input value={accountProfile.email} onChange={event => setAccountProfile({ ...accountProfile, email: event.target.value })} /></div>
             <div><Label>Telefone</Label><Input value={accountProfile.phone} onChange={event => setAccountProfile({ ...accountProfile, phone: event.target.value })} /></div>
@@ -520,32 +521,56 @@ export default function Configuracoes() {
           </form>
         </TabsContent>
 
-        <TabsContent value="users" className="card-elevated p-6 mt-4">
-          <div className="flex justify-between items-center mb-4">
+        <TabsContent value="users" className="card-elevated mt-4 p-4 sm:p-6">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <h3 className="font-display font-bold">Usuários da equipe</h3>
-            <Button className="bg-gradient-primary gap-2" onClick={openNewUser}><Plus className="w-4 h-4" /> Novo usuário</Button>
+            <Button className="gap-2 bg-gradient-primary" onClick={openNewUser}><Plus className="h-4 w-4" /> Novo usuário</Button>
           </div>
-          <table className="w-full text-sm">
-            <thead><tr className="text-left text-xs uppercase text-muted-foreground border-b">
-              <th className="pb-3 font-semibold">Usuário</th><th className="pb-3 font-semibold">E-mail</th>
-              <th className="pb-3 font-semibold">Cargo</th><th className="pb-3 font-semibold">Status</th><th></th>
-            </tr></thead>
-            <tbody>
-              {users.map(u => (
-                <tr key={u.id} className="border-b border-border/40">
-                  <td className="py-3"><div className="flex items-center gap-2"><Avatar className="w-8 h-8"><AvatarImage src={u.photoUrl} alt={u.name} /><AvatarFallback className="bg-primary-soft text-primary text-xs font-semibold">{u.avatar}</AvatarFallback></Avatar>{u.name}</div></td>
-                  <td className="py-3 text-muted-foreground">{u.email}</td>
-                  <td className="py-3">{roleLabel(u.role)}</td>
-                  <td className="py-3"><span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${u.active ? "bg-success-soft text-success" : "bg-muted text-muted-foreground"}`}>{u.active ? "Ativo" : "Inativo"}</span></td>
-                  <td className="py-3 text-right">
-                    <Button size="icon" variant="ghost" onClick={() => openEditUser(u)}><Pencil className="w-3.5 h-3.5" /></Button>
-                    <Switch checked={u.active} onCheckedChange={() => toggleUserActive(u)} className="ml-2" />
-                    <Button size="icon" variant="ghost" className="text-destructive ml-1" onClick={() => removeUser(u.id)}><Trash2 className="w-3.5 h-3.5" /></Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <ResponsiveTable
+            rows={users}
+            rowKey={u => u.id}
+            emptyMessage="Nenhum usuário cadastrado."
+            className="-mx-2"
+            columns={[
+              {
+                key: "usuario",
+                header: "Usuário",
+                primary: true,
+                cell: u => (
+                  <div className="flex items-center gap-2">
+                    <Avatar className="h-8 w-8">
+                      <AvatarImage src={u.photoUrl} alt={u.name} />
+                      <AvatarFallback className="bg-primary-soft text-xs font-semibold text-primary">{u.avatar}</AvatarFallback>
+                    </Avatar>
+                    {u.name}
+                  </div>
+                ),
+              },
+              { key: "email", header: "E-mail", cell: u => <span className="break-all text-muted-foreground">{u.email}</span> },
+              { key: "cargo", header: "Cargo", cell: u => roleLabel(u.role) },
+              {
+                key: "status",
+                header: "Status",
+                cell: u => (
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${u.active ? "bg-success-soft text-success" : "bg-muted text-muted-foreground"}`}>
+                    {u.active ? "Ativo" : "Inativo"}
+                  </span>
+                ),
+              },
+              {
+                key: "acoes",
+                header: "Ações",
+                className: "text-right",
+                cell: u => (
+                  <div className="flex items-center justify-end gap-1">
+                    <Button size="icon" variant="ghost" onClick={() => openEditUser(u)} aria-label={`Editar ${u.name}`}><Pencil className="h-3.5 w-3.5" /></Button>
+                    <Switch checked={u.active} onCheckedChange={() => toggleUserActive(u)} aria-label={`Ativar ${u.name}`} />
+                    <Button size="icon" variant="ghost" className="text-destructive" onClick={() => removeUser(u.id)} aria-label={`Remover ${u.name}`}><Trash2 className="h-3.5 w-3.5" /></Button>
+                  </div>
+                ),
+              },
+            ]}
+          />
         </TabsContent>
 
         <TabsContent value="automation" className="card-elevated p-6 mt-4 max-w-3xl space-y-8">
@@ -666,8 +691,8 @@ export default function Configuracoes() {
                 {([0, 1, 2, 3, 4, 5, 6] as DayOfWeek[]).map(day => {
                   const cfg = agentSchedule.weekly[day];
                   return (
-                    <div key={day} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-3 rounded-lg border border-border/60 p-3">
-                      <div className="flex items-center gap-3">
+                    <div key={day} className="grid grid-cols-[1fr_auto_1fr] items-center gap-x-3 gap-y-2 rounded-lg border border-border/60 p-3 sm:grid-cols-[1fr_auto_auto_auto]">
+                      <div className="col-span-3 flex items-center gap-3 sm:col-span-1">
                         <Switch
                           checked={cfg.enabled}
                           onCheckedChange={enabled => setAgentSchedule(prev => ({
@@ -685,9 +710,9 @@ export default function Configuracoes() {
                           ...prev,
                           weekly: { ...prev.weekly, [day]: { ...prev.weekly[day], startTime: event.target.value } },
                         }))}
-                        className="w-32"
+                        className="w-full sm:w-32"
                       />
-                      <span className="text-xs text-muted-foreground">até</span>
+                      <span className="text-center text-xs text-muted-foreground">até</span>
                       <Input
                         type="time"
                         value={cfg.endTime}
@@ -696,7 +721,7 @@ export default function Configuracoes() {
                           ...prev,
                           weekly: { ...prev.weekly, [day]: { ...prev.weekly[day], endTime: event.target.value } },
                         }))}
-                        className="w-32"
+                        className="w-full sm:w-32"
                       />
                     </div>
                   );

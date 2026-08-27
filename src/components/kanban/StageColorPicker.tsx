@@ -44,7 +44,7 @@ export function StageColorPicker({ value, onChange }: { value?: string; onChange
                     aria-pressed={value === color.value}
                     onClick={() => { onChange(color.value); setOpen(false); }}
                     className={cn(
-                      "h-6 w-6 rounded-full transition",
+                      "h-8 w-8 rounded-full transition",
                       color.swatch,
                       value === color.value ? "ring-2 ring-foreground ring-offset-1 ring-offset-background" : "opacity-75 hover:opacity-100",
                     )}

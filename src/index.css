@@ -81,6 +81,28 @@
     --sidebar-accent-foreground: 0 0% 100%;
     --sidebar-border: 252 60% 50%;
     --sidebar-ring: 0 0% 100%;
+
+    /* Altura do "chrome" do app (Topbar + padding do main + barra inferior).
+       Serve para a classe .app-pane calcular a altura util de uma tela cheia
+       sem cada pagina chutar um "100vh - 180px" diferente. */
+    --topbar-h: 4rem;
+    --main-pad-y: 2rem; /* py-4 no mobile = 1rem em cima + 1rem embaixo */
+    --bottomnav-h: 0px;
+    /* Alimentado por useViewportInset(): altura do teclado virtual aberto. */
+    --kb-inset: 0px;
+  }
+
+  @media (min-width: 640px) {
+    :root {
+      --main-pad-y: 3rem; /* sm:py-6 */
+    }
+  }
+
+  /* Abaixo de md a BottomNav ocupa espaco real na base da tela. */
+  @media (max-width: 767px) {
+    :root {
+      --bottomnav-h: calc(3.5rem + env(safe-area-inset-bottom));
+    }
   }
 
   .dark {
@@ -110,6 +132,9 @@
     @apply bg-background text-foreground;
     font-family: 'Inter', system-ui, sans-serif;
     font-feature-settings: 'cv02','cv03','cv04','cv11';
+    /* Sem isso o "puxar para atualizar" do Chrome Android dispara quando o
+       usuario rola pro topo do historico de mensagens. */
+    overscroll-behavior-y: none;
   }
   h1, h2, h3, h4, h5 {
     font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
@@ -125,4 +150,22 @@
   .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
   .scrollbar-thin::-webkit-scrollbar-thumb { @apply bg-border rounded-full; }
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+
+  /* Painel que ocupa exatamente a altura util da tela (Conversas, Equipe,
+     Kanban, Prontuarios, Consultas). dvh e nao vh: no mobile a barra de URL
+     colapsa ao rolar e o vh continua contando a altura antiga, jogando o
+     rodape do painel (o composer do chat) pra fora da tela. */
+  .app-pane {
+    height: calc(100dvh - var(--topbar-h) - var(--main-pad-y) - var(--bottomnav-h) - var(--kb-inset));
+    min-height: 0;
+  }
+}
+
+@layer utilities {
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
 }

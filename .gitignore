@@ -36,3 +36,6 @@ backend/.wwebjs_cache
 .env.*
 !.env.example
 backend/.env.bak-*
+
+# VPS / acesso local — nunca commitar
+vps.txt

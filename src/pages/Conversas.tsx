@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ClientTemperatureBadge, ConversationStatus, StatusBadge, TagBadge } from "@/components/shared/Badges";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { Archive, ArchiveRestore, ArrowDownWideNarrow, ArrowUpNarrowWide, Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, ClipboardList, Clock, Contact as ContactIcon, Copy, FileText, Film, Filter, FolderOpen, Image as ImageIcon, ImageOff, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, MessageSquareText, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, SlidersHorizontal, Smartphone, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowDownWideNarrow, ArrowUpNarrowWide, Ban, Bold, Bot, CalendarClock, CalendarPlus, Check, CheckCheck, ChevronLeft, ClipboardList, Clock, Contact as ContactIcon, Copy, FileText, Film, Filter, FolderOpen, Image as ImageIcon, ImageOff, Info, Italic, KanbanSquare, Loader2, MessageCirclePlus, MessageSquareText, Mic, MoreVertical, Music, Paperclip, Pencil, Phone, Plus, Scissors, Search, Send, Settings2, SlidersHorizontal, Smartphone, Tag, Trash2, UserPlus, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -33,6 +33,8 @@ import { RecordingWaveform } from "@/components/chat/RecordingWaveform";
 import { SchedulingProposalBar } from "@/components/chat/SchedulingProposalBar";
 import { isAtendente, seesAllDeals } from "@/lib/roles";
 import { mensagemDeErro } from "@/lib/erros";
+import { useIsCompact } from "@/hooks/use-mobile";
+import { useKeyboardInset } from "@/hooks/useViewportInset";
 
 type Conversation = {
   id: string;
@@ -373,6 +375,18 @@ export default function Conversas() {
     : conversations[0]?.id;
   const [selectedId, setSelectedId] = useState(initialSelectedId);
 
+  // Abaixo de lg a lista e a thread dividem a mesma tela, então uma exclui a
+  // outra (como no app do WhatsApp). `selectedId` sozinho não serve de sinal:
+  // ele já vem pré-preenchido com a primeira conversa para o painel direito do
+  // desktop nunca nascer vazio — no celular isso abriria a thread na cara do
+  // usuário antes dele escolher qualquer coisa.
+  const compact = useIsCompact();
+  const [threadOpenMobile, setThreadOpenMobile] = useState(Boolean(initialDealId));
+  const abrirConversa = (id: string) => {
+    setSelectedId(id);
+    setThreadOpenMobile(true);
+  };
+
   // Quantas conversas caem em cada etapa. Vai no próprio filtro: assim dá para
   // ver antes de marcar que uma etapa está vazia, em vez de marcar e encarar
   // uma lista em branco sem saber por quê.
@@ -520,6 +534,9 @@ export default function Conversas() {
     return () => window.clearInterval(id);
   }, []);
 
+  // Abrir o teclado virtual encolhe o painel: sem entrar nesta dependência, a
+  // última mensagem some atrás do teclado assim que o usuário toca no composer.
+  const keyboardInset = useKeyboardInset();
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
@@ -528,7 +545,7 @@ export default function Conversas() {
     // volta para o fim — tornando o histórico impossível de ler.
     if (alturaAntesDeCarregar.current !== null) return;
     el.scrollTop = el.scrollHeight;
-  }, [selected?.id, waMessages.length]);
+  }, [selected?.id, waMessages.length, keyboardInset]);
 
   // --- Rolagem da lista lateral ---
   // Chegou mensagem: a conversa sobe para o topo, a lista se reordena e a
@@ -586,6 +603,7 @@ export default function Conversas() {
       await whatsappApi.archiveConversation(selected.id);
       setArchiveConfirmOpen(false);
       setSelectedId("");
+      setThreadOpenMobile(false);
       await refreshConversations();
       await loadArchivedConversations();
       toast.success(`Conversa com ${selected.customer} arquivada`);
@@ -855,7 +873,7 @@ export default function Conversas() {
     try {
       const conversation = await whatsappApi.startConversation({ instanceId, phone, customer });
       await refreshConversations();
-      setSelectedId(conversation.id);
+      abrirConversa(conversation.id);
       setNewConversationOpen(false);
       setNewConversationPhone("");
       setNewConversationName("");
@@ -1258,11 +1276,17 @@ ${texto}` : texto));
 
   return (
     <AppLayout title="Conversas" subtitle="Atendimento via WhatsApp">
-      <div className="card-elevated flex min-h-[calc(100vh-180px)] flex-col overflow-hidden lg:h-[calc(100vh-180px)] lg:flex-row">
-        <aside className="flex max-h-[46vh] w-full flex-col border-b border-border lg:max-h-none lg:w-80 lg:border-b-0 lg:border-r">
+      <div className="card-elevated app-pane flex flex-col overflow-hidden lg:flex-row">
+        <aside className={cn(
+          "flex w-full min-w-0 flex-col lg:flex lg:w-80 lg:border-r lg:border-border",
+          compact && threadOpenMobile && "hidden",
+        )}>
           <div className="border-b border-border p-3">
-            <div className="flex gap-2">
-              <div className="relative min-w-0 flex-1">
+            <div className="flex flex-wrap gap-2">
+              {/* basis-full abaixo de sm: com quatro botões de ícone (160px) na
+                  mesma linha, a busca ficaria com ~80px num aparelho de 320px.
+                  Aí ela ganha a própria linha e os filtros descem. */}
+              <div className="relative min-w-0 flex-1 basis-full sm:basis-0">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={conversationSearch}
@@ -1495,7 +1519,7 @@ ${texto}` : texto));
               return (
                 <button
                   key={conversation.id}
-                  onClick={() => setSelectedId(conversation.id)}
+                  onClick={() => abrirConversa(conversation.id)}
                   // `content-visibility: auto` pula layout e pintura das linhas fora
                   // da tela: o efeito prático da virtualização, sem trocar a
                   // estrutura do DOM (o que quebraria a restauração de rolagem
@@ -1555,10 +1579,22 @@ ${texto}` : texto));
           </div>
         </aside>
 
-        <div className="flex min-w-0 flex-1 flex-col bg-secondary/30">
+        <div className={cn(
+          "flex min-w-0 flex-1 flex-col bg-secondary/30 lg:flex",
+          compact && !threadOpenMobile && "hidden",
+        )}>
           {selected ? (
             <>
-              <div className="flex flex-wrap items-center gap-3 border-b border-border bg-card p-3">
+              <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card p-3 sm:gap-3">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="-ml-1 shrink-0 lg:hidden"
+                  onClick={() => setThreadOpenMobile(false)}
+                  aria-label="Voltar para a lista de conversas"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </Button>
                 <button type="button" onClick={() => setLeadActionsOpen(true)} className="rounded-full transition hover:opacity-80" title="Opções do lead">
                   <Avatar className="h-10 w-10">
                     {selected.avatarUrl && <AvatarImage src={selected.avatarUrl} alt={selected.customer} />}
@@ -1588,43 +1624,74 @@ ${texto}` : texto));
                     )}
                   </div>
                 </div>
-                {minhaInstancia && !jaEstaNaMinhaInstancia && selected.phone && (
-                  <Button
-                    variant="outline"
-                    className="gap-2"
-                    onClick={falarPeloMeuWhatsApp}
-                    disabled={startingConversation}
-                    title={`Continuar com este paciente pelo ${minhaInstancia.name}`}
-                  >
-                    {startingConversation
-                      ? <Loader2 className="h-4 w-4 animate-spin" />
-                      : <Smartphone className="h-4 w-4" />}
-                    Falar pelo meu WhatsApp
+                {/* Abaixo de lg estes botões não cabem: cinco rótulos longos em
+                    português viravam 4-5 linhas de cabeçalho antes da primeira
+                    mensagem aparecer. No celular eles vivem no menu "⋮". */}
+                <div className="hidden items-center gap-2 lg:flex">
+                  {minhaInstancia && !jaEstaNaMinhaInstancia && selected.phone && (
+                    <Button
+                      variant="outline"
+                      className="gap-2"
+                      onClick={falarPeloMeuWhatsApp}
+                      disabled={startingConversation}
+                      title={`Continuar com este paciente pelo ${minhaInstancia.name}`}
+                    >
+                      {startingConversation
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <Smartphone className="h-4 w-4" />}
+                      Falar pelo meu WhatsApp
+                    </Button>
+                  )}
+                  <Button variant="outline" className="gap-2" onClick={() => navigate(`/calendario?deal=${selected.dealId || ""}&lead=${encodeURIComponent(selected.customer)}&phone=${encodeURIComponent(selected.phone)}`)}>
+                    <CalendarClock className="h-4 w-4" /> Agendar Atendimento
                   </Button>
-                )}
-                <Button variant="outline" className="gap-2" onClick={() => navigate(`/calendario?deal=${selected.dealId || ""}&lead=${encodeURIComponent(selected.customer)}&phone=${encodeURIComponent(selected.phone)}`)}>
-                  <CalendarClock className="h-4 w-4" /> Agendar Atendimento
-                </Button>
-                {selectedDeal && (
-                  <Button variant="outline" className="gap-2" asChild>
-                    <Link to={`/kanban?deal=${selectedDeal.id}`}><KanbanSquare className="h-4 w-4" /> Ver Kanban</Link>
+                  {selectedDeal && (
+                    <Button variant="outline" className="gap-2" asChild>
+                      <Link to={`/kanban?deal=${selectedDeal.id}`}><KanbanSquare className="h-4 w-4" /> Ver Kanban</Link>
+                    </Button>
+                  )}
+                  {!selectedDeal && (
+                    <Button variant="outline" className="gap-2" onClick={() => createKanbanCardFromConversation()}>
+                      <KanbanSquare className="h-4 w-4" /> Criar card
+                    </Button>
+                  )}
+                  <Button variant="outline" className="gap-2" onClick={openProntuarioPage} title="Abrir prontuário">
+                    <FolderOpen className="h-4 w-4" /> Prontuário
                   </Button>
-                )}
-                {!selectedDeal && (
-                  <Button variant="outline" className="gap-2" onClick={() => createKanbanCardFromConversation()}>
-                    <KanbanSquare className="h-4 w-4" /> Criar card
-                  </Button>
-                )}
-                <Button variant="outline" className="gap-2" onClick={openProntuarioPage} title="Abrir prontuário">
-                  <FolderOpen className="h-4 w-4" /> Prontuário
-                </Button>
+                </div>
                 <Popover>
                   <PopoverTrigger asChild>
-                    <Button variant="ghost" size="icon" title="Mais opções">
+                    <Button variant="ghost" size="icon" className="ml-auto shrink-0 lg:ml-0" title="Mais opções">
                       <MoreVertical className="h-4 w-4" />
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent align="end" className="w-56 p-1">
+                    <div className="lg:hidden">
+                      {minhaInstancia && !jaEstaNaMinhaInstancia && selected.phone && (
+                        <button onClick={falarPeloMeuWhatsApp} disabled={startingConversation} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-secondary disabled:opacity-50">
+                          {startingConversation
+                            ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                            : <Smartphone className="h-4 w-4 text-muted-foreground" />}
+                          Falar pelo meu WhatsApp
+                        </button>
+                      )}
+                      <button onClick={() => navigate(`/calendario?deal=${selected.dealId || ""}&lead=${encodeURIComponent(selected.customer)}&phone=${encodeURIComponent(selected.phone)}`)} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-secondary">
+                        <CalendarClock className="h-4 w-4 text-muted-foreground" /> Agendar atendimento
+                      </button>
+                      {selectedDeal ? (
+                        <Link to={`/kanban?deal=${selectedDeal.id}`} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-secondary">
+                          <KanbanSquare className="h-4 w-4 text-muted-foreground" /> Ver no Kanban
+                        </Link>
+                      ) : (
+                        <button onClick={() => createKanbanCardFromConversation()} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-secondary">
+                          <KanbanSquare className="h-4 w-4 text-muted-foreground" /> Criar card no Kanban
+                        </button>
+                      )}
+                      <button onClick={openProntuarioPage} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-secondary">
+                        <FolderOpen className="h-4 w-4 text-muted-foreground" /> Prontuário
+                      </button>
+                      <div className="my-1 border-t border-border" />
+                    </div>
                     <button onClick={() => setLeadActionsOpen(true)} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-secondary">
                       <Settings2 className="h-4 w-4 text-muted-foreground" /> Opções do lead
                     </button>
@@ -1670,7 +1737,7 @@ ${texto}` : texto));
               )}
 
               <div
-                className="flex-1 space-y-3 overflow-y-auto p-6"
+                className="flex-1 space-y-3 overflow-y-auto p-3 sm:p-6"
                 ref={messagesContainerRef}
                 onScroll={aoRolarMensagens}
               >
@@ -1706,7 +1773,7 @@ ${texto}` : texto));
                       return (
                       <Fragment key={message.id}>
                       <div className={cn("flex", message.fromMe ? "justify-end" : "justify-start")}>
-                        <div className={cn("max-w-[70%] rounded-2xl text-sm",
+                        <div className={cn("max-w-[85%] rounded-2xl text-sm sm:max-w-[70%]",
                           // Figurinha vai SEM balão, como no WhatsApp: o fundo
                           // violeta/branco do balão arruína o alfa da figurinha.
                           exibeFigurinha
@@ -1855,20 +1922,20 @@ ${texto}` : texto));
                 />
               )}
 
-              <div className="flex items-center gap-2 border-t border-border bg-card p-3">
+              <div className="flex items-center gap-1 border-t border-border bg-card p-2 sm:gap-2 sm:p-3">
                 {isWaConversation ? (
                   recording ? (
                     <>
-                      <Button variant="ghost" size="icon" title="Cancelar gravação" onClick={() => stopRecording(true)}>
+                      <Button variant="ghost" size="icon" className="shrink-0" title="Cancelar gravação" onClick={() => stopRecording(true)}>
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
-                      <div className="flex flex-1 items-center gap-3 rounded-md bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive">
+                      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md bg-destructive/10 px-2 py-2 text-sm font-medium text-destructive sm:gap-3 sm:px-3">
                         <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-destructive" />
-                        <RecordingWaveform stream={recordingStream} className="h-7 flex-1" color="hsl(var(--destructive))" />
+                        <RecordingWaveform stream={recordingStream} className="h-7 min-w-0 flex-1" color="hsl(var(--destructive))" />
                         <span className="shrink-0 tabular-nums">{Math.floor(recordingSeconds / 60)}:{(recordingSeconds % 60).toString().padStart(2, "0")}</span>
                       </div>
-                      <Button onClick={() => stopRecording(false)} className="gap-2 bg-destructive text-destructive-foreground hover:bg-destructive/90" disabled={sending}>
-                        <Send className="h-4 w-4" /> Enviar
+                      <Button onClick={() => stopRecording(false)} className="shrink-0 gap-2 bg-destructive px-3 text-destructive-foreground hover:bg-destructive/90 sm:px-4" disabled={sending} aria-label="Enviar áudio">
+                        <Send className="h-4 w-4" /> <span className="hidden sm:inline">Enviar</span>
                       </Button>
                     </>
                   ) : (
@@ -1891,7 +1958,7 @@ ${texto}` : texto));
                       />
                       <Popover open={attachOpen} onOpenChange={setAttachOpen}>
                         <PopoverTrigger asChild>
-                          <Button variant="ghost" size="icon" title="Anexar" disabled={sending}>
+                          <Button variant="ghost" size="icon" className="shrink-0" title="Anexar" disabled={sending}>
                             <Paperclip className="h-4 w-4" />
                           </Button>
                         </PopoverTrigger>
@@ -1923,11 +1990,14 @@ ${texto}` : texto));
                         }}
                         onEscolher={applyQuickReply}
                       />
-                      <Button variant="ghost" size="icon" title="Gravar áudio" onClick={startRecording} disabled={sending}>
+                      <Button variant="ghost" size="icon" className="shrink-0" title="Gravar áudio" onClick={startRecording} disabled={sending}>
                         <Mic className="h-4 w-4" />
                       </Button>
-                      <div className="relative flex-1">
-                        {selectionToolbar && (
+                      <div className="relative min-w-0 flex-1">
+                        {/* No celular a barra flutuante é posicionada por
+                            coordenada do cursor e o teclado virtual a joga pra
+                            fora do lugar — some abaixo de lg. */}
+                        {selectionToolbar && !compact && (
                           <div
                             className="absolute z-20 flex -translate-x-1/2 -translate-y-full items-center gap-0.5 rounded-md border border-border bg-popover p-0.5 shadow-md"
                             style={{ top: selectionToolbar.top, left: selectionToolbar.left }}
@@ -1951,7 +2021,10 @@ ${texto}` : texto));
                           ref={messageInputRef}
                           value={draftMessage}
                           onChange={e => setDraftMessage(e.target.value)}
-                          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText(); } }}
+                          // No teclado virtual não existe Shift+Enter: se Enter
+                          // enviasse, escrever parágrafo no celular seria
+                          // impossível. Lá o envio é só pelo botão.
+                          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !compact) { e.preventDefault(); sendText(); } }}
                           onSelect={updateSelectionToolbar}
                           onScroll={updateSelectionToolbar}
                           onBlur={() => setSelectionToolbar(null)}
@@ -1961,15 +2034,15 @@ ${texto}` : texto));
                           disabled={sending}
                         />
                       </div>
-                      <Button onClick={sendText} disabled={sending || !draftMessage.trim()} className="gap-2">
-                        <Send className="h-4 w-4" /> Enviar
+                      <Button onClick={sendText} disabled={sending || !draftMessage.trim()} className="shrink-0 gap-2 px-3 sm:px-4" aria-label="Enviar">
+                        <Send className="h-4 w-4" /> <span className="hidden sm:inline">Enviar</span>
                       </Button>
                     </>
                   )
                 ) : (
                   <>
-                    <Input disabled placeholder="Vincule esta conversa a uma instância de WhatsApp para enviar mensagens" className="bg-secondary" />
-                    <Button disabled className="gap-2"><Paperclip className="h-4 w-4" /> Sem instância</Button>
+                    <Input disabled placeholder="Vincule esta conversa a uma instância de WhatsApp para enviar mensagens" className="min-w-0 bg-secondary" />
+                    <Button disabled className="shrink-0 gap-2 px-3 sm:px-4"><Paperclip className="h-4 w-4" /> <span className="hidden sm:inline">Sem instância</span></Button>
                   </>
                 )}
               </div>
@@ -2070,7 +2143,7 @@ ${texto}` : texto));
                     <div className="flex items-center gap-2">
                       <div className="min-w-0 truncate font-semibold">{selected.customer}</div>
                       {canEditLeadName && (
-                        <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => setEditingName(true)} title="Editar nome do lead">
+                        <Button variant="ghost" size="iconSm" className="shrink-0" onClick={() => setEditingName(true)} title="Editar nome do lead">
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
                       )}
@@ -2188,7 +2261,7 @@ ${texto}` : texto));
                     <div className="text-[10px] font-semibold uppercase text-muted-foreground">Tags</div>
                     <Popover>
                       <PopoverTrigger asChild>
-                        <Button variant="outline" size="icon" className="h-7 w-7" title="Gerenciar tags">
+                        <Button variant="outline" size="iconSm" title="Gerenciar tags">
                           <Tag className="h-4 w-4" />
                         </Button>
                       </PopoverTrigger>
@@ -2291,7 +2364,7 @@ ${texto}` : texto));
               rows={3}
               className="resize-none"
             />
-            <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <Label className="mb-1 block text-[11px] font-semibold uppercase text-muted-foreground">Data</Label>
                 <Input type="date" value={schedDate} onChange={e => setSchedDate(e.target.value)} />

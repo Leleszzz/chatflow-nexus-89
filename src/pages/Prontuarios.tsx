@@ -252,7 +252,7 @@ export default function Prontuarios() {
 
   return (
     <AppLayout title="Prontuários" subtitle="Documentos, fotos e arquivos de cada cliente">
-      <div className="grid h-[calc(100vh-180px)] grid-cols-1 gap-4 lg:grid-cols-[320px_1fr]">
+      <div className="grid grid-cols-1 gap-4 lg:app-pane lg:grid-cols-[320px_1fr]">
         {/* Coluna esquerda: lista de clientes */}
         <aside className="flex min-h-0 flex-col rounded-2xl border border-border bg-card">
           <div className="border-b border-border p-3">
@@ -339,7 +339,7 @@ export default function Prontuarios() {
                     )}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Button variant="outline" size="sm" className="gap-2" onClick={openConversation}>
                     <MessageCircle className="h-4 w-4" /> Conversa
                   </Button>

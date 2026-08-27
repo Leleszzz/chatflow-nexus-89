@@ -28,7 +28,7 @@ export default function Login() {
   };
 
   return (
-    <main className="min-h-screen bg-background grid place-items-center px-4">
+    <main className="min-h-dvh bg-background grid place-items-center px-4">
       <form onSubmit={handleSubmit} className="w-full max-w-sm rounded-xl border border-border/70 bg-card p-6 shadow-soft">
         <div className="mb-6 flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-soft text-primary">

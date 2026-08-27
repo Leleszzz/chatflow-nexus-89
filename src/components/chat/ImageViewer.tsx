@@ -134,7 +134,7 @@ export function ImageViewer({ src, alt = "midia", kind = "image", open, onClose 
       </div>
 
       <div
-        className={cn("relative max-h-screen max-w-[100vw] select-none", !isVideo && zoom > 1 && "cursor-grab")}
+        className={cn("relative max-h-[100dvh] max-w-[100vw] select-none", !isVideo && zoom > 1 && "cursor-grab")}
         style={{ cursor: dragRef.current ? "grabbing" : undefined }}
         onClick={e => e.stopPropagation()}
         onMouseDown={onMouseDown}

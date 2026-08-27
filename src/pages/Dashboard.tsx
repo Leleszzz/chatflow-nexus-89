@@ -15,6 +15,7 @@ import { useDashboardMetrics, formatSecondsAsMinSec } from "@/hooks/useDashboard
 import { Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, CartesianGrid, Area, AreaChart } from "recharts";
 import { MessageCircle, Clock, AlertTriangle, ShoppingBag, TrendingUp, Flame, Thermometer, Snowflake, ChevronDown, ChevronRight } from "lucide-react";
 import { isAtendente } from "@/lib/roles";
+import { ResponsiveTable } from "@/components/shared/ResponsiveTable";
 
 const PERIODS = [
   { id: "today", label: "Hoje", days: 1 },
@@ -164,7 +165,7 @@ export default function Dashboard() {
           <Label className="text-xs text-muted-foreground">Atendente</Label>
           <Popover>
             <PopoverTrigger asChild>
-              <Button variant="outline" className="w-[220px] justify-between bg-card rounded-xl font-normal">
+              <Button variant="outline" className="w-full justify-between rounded-xl bg-card font-normal sm:w-[220px]">
                 <span className="truncate">{sellerFilterLabel}</span>
                 <ChevronDown className="w-4 h-4 text-muted-foreground" />
               </Button>
@@ -208,7 +209,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard onClick={() => navigate("/conversas")} icon={<MessageCircle className="w-5 h-5" />} label="Total de atendimentos" value={String(totals.atendimentos)} delta={metricDeltas.atendimentos.percent} deltaValue={metricDeltas.atendimentos.value} deltaPositive={metricDeltas.atendimentos.positive} accent="primary" />
         <MetricCard onClick={() => navigate("/relatorios?report=vendedoras")} icon={<Clock className="w-5 h-5" />} label="Tempo médio de resposta" value={avgResponseLabel} delta={metricDeltas.resposta.percent} deltaValue={metricDeltas.resposta.value} deltaPositive={!metricDeltas.resposta.positive} accent="info" />
         <MetricCard onClick={() => navigate("/conversas?status=sem-resposta")} icon={<AlertTriangle className="w-5 h-5" />} label="Conversas sem resposta" value={String(totals.unread)} delta={metricDeltas.unread.percent} deltaValue={metricDeltas.unread.value} deltaPositive={false} accent="destructive" />
@@ -220,7 +221,7 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-        <div className="card-elevated p-6 lg:col-span-2">
+        <div className="card-elevated p-4 sm:p-6 lg:col-span-2">
           <div className="flex items-start justify-between mb-4">
             <div>
               <h3 className="font-display font-bold text-base">Atendimentos por {period === "today" ? "hora" : "dia"}</h3>
@@ -236,7 +237,7 @@ export default function Dashboard() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-              <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
+              <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={24} />
               <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
               <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid hsl(var(--border))", background: "hsl(var(--card))" }} />
               <Area type="monotone" dataKey="atendimentos" stroke="hsl(var(--primary))" strokeWidth={2.5} fill="url(#g1)" />
@@ -245,7 +246,7 @@ export default function Dashboard() {
           </ResponsiveContainer>
         </div>
 
-        <div className="card-elevated p-6">
+        <div className="card-elevated p-4 sm:p-6">
           <h3 className="font-display font-bold text-base">Motivos de recusa</h3>
           <p className="text-xs text-muted-foreground mb-2">Por que perdemos vendas</p>
           {refusal.length === 0 ? (
@@ -287,51 +288,46 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="card-elevated p-6 lg:col-span-2">
+        <div className="card-elevated p-4 sm:p-6 lg:col-span-2">
           <h3 className="font-display font-bold text-base mb-4">Ranking de vendedoras</h3>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase text-muted-foreground border-b border-border">
-                  <th className="pb-3 font-semibold">Vendedora</th>
-                  <th className="pb-3 font-semibold">Atendimentos</th>
-                  <th className="pb-3 font-semibold">Vendas</th>
-                  <th className="pb-3 font-semibold">Conversão</th>
-                  <th className="pb-3 font-semibold">Tempo médio</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ranking.map((s, i) => (
-                  <tr key={s.id} className="border-b border-border/40 last:border-0">
-                    <td className="py-3">
-                      <div className="flex items-center gap-2.5">
-                        <div className="text-xs font-bold text-muted-foreground w-4">{i + 1}º</div>
-                        <Avatar className="w-8 h-8"><AvatarFallback className="bg-primary-soft text-primary text-xs font-semibold">{s.avatar}</AvatarFallback></Avatar>
-                        <span className="font-semibold">{s.name}</span>
-                      </div>
-                    </td>
-                    <td className="py-3 font-semibold">{s.atendimentos}</td>
-                    <td className="py-3 font-semibold text-success">{s.vendas}</td>
-                    <td className="py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-16 h-1.5 bg-secondary rounded-full overflow-hidden">
-                          <div className="h-full bg-gradient-primary" style={{ width: `${Math.min(s.conversao * 3, 100)}%` }} />
-                        </div>
-                        <span className="text-xs font-semibold">{s.conversao}%</span>
-                      </div>
-                    </td>
-                    <td className="py-3 text-muted-foreground">{s.tempoMedio}</td>
-                  </tr>
-                ))}
-                {ranking.length === 0 && (
-                  <tr><td colSpan={5} className="py-6 text-center text-xs text-muted-foreground">Nenhuma vendedora ativa para este filtro.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          <ResponsiveTable
+            rows={ranking}
+            rowKey={s => s.id}
+            emptyMessage="Nenhuma vendedora ativa para este filtro."
+            className="-mx-2"
+            columns={[
+              {
+                key: "vendedora",
+                header: "Vendedora",
+                primary: true,
+                cell: s => (
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-4 text-xs font-bold text-muted-foreground">{ranking.indexOf(s) + 1}º</div>
+                    <Avatar className="h-8 w-8"><AvatarFallback className="bg-primary-soft text-xs font-semibold text-primary">{s.avatar}</AvatarFallback></Avatar>
+                    <span className="font-semibold">{s.name}</span>
+                  </div>
+                ),
+              },
+              { key: "atendimentos", header: "Atendimentos", cell: s => <span className="font-semibold">{s.atendimentos}</span> },
+              { key: "vendas", header: "Vendas", cell: s => <span className="font-semibold text-success">{s.vendas}</span> },
+              {
+                key: "conversao",
+                header: "Conversão",
+                cell: s => (
+                  <div className="flex items-center justify-end gap-2 md:justify-start">
+                    <div className="h-1.5 w-16 overflow-hidden rounded-full bg-secondary">
+                      <div className="h-full bg-gradient-primary" style={{ width: `${Math.min(s.conversao * 3, 100)}%` }} />
+                    </div>
+                    <span className="text-xs font-semibold">{s.conversao}%</span>
+                  </div>
+                ),
+              },
+              { key: "tempo", header: "Tempo médio", cell: s => <span className="text-muted-foreground">{s.tempoMedio}</span> },
+            ]}
+          />
         </div>
 
-        <div className="card-elevated p-6">
+        <div className="card-elevated p-4 sm:p-6">
           <h3 className="font-display font-bold text-base mb-1">Conversas críticas</h3>
           <p className="text-xs text-muted-foreground mb-4">Aguardando resposta</p>
           <div className="space-y-2.5">

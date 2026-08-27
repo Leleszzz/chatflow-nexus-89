@@ -71,7 +71,7 @@ export function SchedulingProposalBar({ proposal, appointments, sellerId, canSch
       )}
 
       {!selectedDay ? (
-        <div className="grid grid-cols-6 gap-2">
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
           {proposal.days.map(day => (
             <button
               key={day}
@@ -102,7 +102,7 @@ export function SchedulingProposalBar({ proposal, appointments, sellerId, canSch
           Nenhum horário livre neste dia. Escolha outra data.
         </div>
       ) : (
-        <div className="grid grid-cols-6 gap-2">
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
           {freeHours.map(h => (
             <button
               key={h}

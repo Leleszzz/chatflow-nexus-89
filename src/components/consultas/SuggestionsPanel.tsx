@@ -120,7 +120,7 @@ export function SuggestionsPanel({ consultation, deal, conversa }: Props) {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7 text-muted-foreground"
+                    className="h-9 w-9 text-muted-foreground"
                     title="Criar tarefa para a secretaria"
                     onClick={() => setRascunho({
                       ...def.tarefa(sugestao.payload, { nome }),
@@ -134,7 +134,7 @@ export function SuggestionsPanel({ consultation, deal, conversa }: Props) {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7 text-muted-foreground"
+                    className="h-9 w-9 text-muted-foreground"
                     title="Dispensar"
                     onClick={() => patch(sugestao, "dispensado").catch(() => {})}
                   >

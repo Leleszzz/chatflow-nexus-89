@@ -258,17 +258,17 @@ export default function Instancias() {
                               if (e.key === "Escape") cancelRename();
                             }}
                           />
-                          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={saveRename} title="Salvar">
+                          <Button variant="ghost" size="iconSm" className="shrink-0" onClick={saveRename} title="Salvar">
                             <Check className="h-3.5 w-3.5" />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={cancelRename} title="Cancelar">
+                          <Button variant="ghost" size="iconSm" className="shrink-0" onClick={cancelRename} title="Cancelar">
                             <X className="h-3.5 w-3.5" />
                           </Button>
                         </div>
                       ) : (
                         <div className="flex items-center gap-1.5">
                           <h3 className="truncate font-display text-base font-bold">{instance.name}</h3>
-                          <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => startRename(instance.id, instance.name)} title="Renomear">
+                          <Button variant="ghost" size="iconSm" className="shrink-0" onClick={() => startRename(instance.id, instance.name)} title="Renomear">
                             <Pencil className="h-3 w-3" />
                           </Button>
                         </div>
@@ -281,7 +281,7 @@ export default function Instancias() {
                   </span>
                 </div>
 
-                <div className="mb-4 grid grid-cols-2 gap-3 rounded-xl bg-secondary p-3">
+                <div className="mb-4 grid grid-cols-1 gap-3 rounded-xl bg-secondary p-3 sm:grid-cols-2">
                   <div>
                     <div className="text-[10px] font-semibold uppercase text-muted-foreground">Ultima sync</div>
                     <div className="mt-1 text-sm font-medium">{formatDateTime(instance.lastSync)}</div>
@@ -339,7 +339,7 @@ export default function Instancias() {
                   )}
                 </div>
 
-                <div className="mt-5 flex gap-2">
+                <div className="mt-5 flex flex-wrap gap-2">
                   {instance.status === "conectando" || instance.status === "ativa" ? (
                     <div className="flex flex-1 items-center justify-center gap-2 rounded-md bg-secondary px-3 py-2 text-xs font-medium text-muted-foreground">
                       {instance.status === "conectando" ? (
@@ -487,14 +487,14 @@ export default function Instancias() {
                 <div className="flex flex-col items-center gap-3 py-2">
                   {qrDataUrl ? (
                     <>
-                      <img src={qrDataUrl} alt="QR Code" className="h-72 w-72 rounded-xl border" />
+                      <img src={qrDataUrl} alt="QR Code" className="h-auto w-full max-w-[288px] rounded-xl border" />
                       <p className="text-center text-xs text-muted-foreground">
                         WhatsApp &gt; Aparelhos conectados &gt; Conectar aparelho.<br/>
                         O QR atualiza automaticamente.
                       </p>
                     </>
                   ) : (
-                    <div className="flex h-72 w-72 items-center justify-center rounded-xl border bg-secondary text-sm text-muted-foreground">
+                    <div className="flex aspect-square w-full max-w-[288px] items-center justify-center rounded-xl border bg-secondary text-sm text-muted-foreground">
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Gerando QR...
                     </div>
                   )}

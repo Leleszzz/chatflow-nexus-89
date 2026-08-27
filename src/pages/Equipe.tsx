@@ -2,7 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { LogOut, MessageSquarePlus, Search, Send, Users, UsersRound } from "lucide-react";
+import { ChevronLeft, LogOut, MessageSquarePlus, Search, Send, Users, UsersRound } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -17,6 +17,7 @@ import { InternalThread, whatsappApi } from "@/lib/whatsapp-api";
 import { cn } from "@/lib/utils";
 import { useCRM } from "@/store/crm-store";
 import { roleLabel } from "@/lib/roles";
+import { useIsCompact } from "@/hooks/use-mobile";
 
 const initials = (name: string) => (name || "").trim().slice(0, 2).toUpperCase() || "?";
 
@@ -48,6 +49,9 @@ export default function Equipe() {
   const { currentUser, teamUsers } = useCRM();
   const { threads, loading, markRead, refresh } = useInternalThreads(currentUser?.id);
   const [selectedId, setSelectedId] = useState<string>("");
+  // Abaixo de lg a lista e a thread dividem a mesma tela: uma exclui a outra.
+  // Aqui `selectedId` já serve de sinal (nasce vazio, sem auto-seleção).
+  const compact = useIsCompact();
   const { messages, loading: loadingMessages, setMessages } = useInternalMessages(selectedId || null, currentUser?.id);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -160,11 +164,14 @@ export default function Equipe() {
 
   return (
     <AppLayout title="Equipe" subtitle="Conversas internas entre usuários">
-      <div className="card-elevated flex min-h-[calc(100vh-180px)] flex-col overflow-hidden lg:h-[calc(100vh-180px)] lg:flex-row">
-        <aside className="flex max-h-[46vh] w-full flex-col border-b border-border lg:max-h-none lg:w-80 lg:border-b-0 lg:border-r">
+      <div className="card-elevated app-pane flex flex-col overflow-hidden lg:flex-row">
+        <aside className={cn(
+          "flex w-full min-w-0 flex-col lg:flex lg:w-80 lg:border-r lg:border-border",
+          compact && selectedId && "hidden",
+        )}>
           <div className="border-b border-border p-3">
-            <div className="flex gap-2">
-              <div className="relative min-w-0 flex-1">
+            <div className="flex flex-wrap gap-2">
+              <div className="relative min-w-0 flex-1 basis-full sm:basis-0">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={search}
@@ -237,7 +244,10 @@ export default function Equipe() {
           </div>
         </aside>
 
-        <section className="flex min-w-0 flex-1 flex-col">
+        <section className={cn(
+          "flex min-w-0 flex-1 flex-col lg:flex",
+          compact && !selectedId && "hidden",
+        )}>
           {!selected ? (
             <div className="flex flex-1 items-center justify-center p-6">
               <EmptyState
@@ -250,8 +260,17 @@ export default function Equipe() {
             </div>
           ) : (
             <>
-              <div className="flex items-center gap-3 border-b border-border px-4 py-3">
-                <Avatar className="h-9 w-9">
+              <div className="flex items-center gap-2 border-b border-border px-3 py-3 sm:gap-3 sm:px-4">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="-ml-1 shrink-0 lg:hidden"
+                  onClick={() => setSelectedId("")}
+                  aria-label="Voltar para a lista de conversas"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </Button>
+                <Avatar className="h-9 w-9 shrink-0">
                   <AvatarFallback className={cn(
                     "text-[10px] font-semibold",
                     selected.type === "group" ? "bg-info-soft text-info" : "bg-gradient-primary text-primary-foreground",
@@ -264,13 +283,13 @@ export default function Equipe() {
                   <div className="truncate text-xs text-muted-foreground">{subtitleFor(selected)}</div>
                 </div>
                 {selected.type === "group" && (
-                  <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground hover:text-destructive" onClick={leaveGroup}>
-                    <LogOut className="h-3.5 w-3.5" /> Sair do grupo
+                  <Button variant="ghost" size="sm" className="shrink-0 gap-1.5 px-2 text-muted-foreground hover:text-destructive sm:px-3" onClick={leaveGroup} title="Sair do grupo">
+                    <LogOut className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Sair do grupo</span>
                   </Button>
                 )}
               </div>
 
-              <div className="flex-1 space-y-1 overflow-y-auto bg-secondary/30 px-4 py-4 scrollbar-thin">
+              <div className="flex-1 space-y-1 overflow-y-auto bg-secondary/30 px-3 py-4 scrollbar-thin sm:px-4">
                 {loadingMessages && <p className="text-center text-xs text-muted-foreground">Carregando mensagens...</p>}
                 {!loadingMessages && messages.length === 0 && (
                   <p className="text-center text-xs text-muted-foreground">Nenhuma mensagem ainda. Diga oi.</p>
@@ -293,7 +312,7 @@ export default function Equipe() {
                       )}
                       <div className={cn("flex", mine ? "justify-end" : "justify-start")}>
                         <div className={cn(
-                          "max-w-[75%] rounded-xl px-3 py-2 text-sm shadow-sm",
+                          "max-w-[85%] rounded-xl px-3 py-2 text-sm shadow-sm sm:max-w-[75%]",
                           mine ? "bg-primary text-primary-foreground" : "bg-card text-foreground",
                         )}>
                           {showSender && (
@@ -314,23 +333,25 @@ export default function Equipe() {
                 <div ref={messagesEndRef} />
               </div>
 
-              <div className="flex items-end gap-2 border-t border-border p-3">
+              <div className="flex items-end gap-2 border-t border-border p-2 sm:p-3">
                 <Textarea
                   value={draft}
                   onChange={event => setDraft(event.target.value)}
                   onKeyDown={event => {
                     // Enter envia; Shift+Enter quebra linha, como no resto do app.
-                    if (event.key === "Enter" && !event.shiftKey) {
+                    // No celular não existe Shift+Enter, então lá o envio é só
+                    // pelo botão — senão escrever parágrafo seria impossível.
+                    if (event.key === "Enter" && !event.shiftKey && !compact) {
                       event.preventDefault();
                       send();
                     }
                   }}
                   placeholder="Escreva uma mensagem..."
                   rows={1}
-                  className="max-h-32 min-h-[40px] flex-1 resize-none bg-secondary"
+                  className="max-h-32 min-h-[40px] min-w-0 flex-1 resize-none bg-secondary"
                 />
-                <Button className="gap-2 bg-gradient-primary" onClick={send} disabled={!draft.trim() || sending}>
-                  <Send className="h-4 w-4" /> Enviar
+                <Button className="shrink-0 gap-2 bg-gradient-primary px-3 sm:px-4" onClick={send} disabled={!draft.trim() || sending} aria-label="Enviar">
+                  <Send className="h-4 w-4" /> <span className="hidden sm:inline">Enviar</span>
                 </Button>
               </div>
             </>

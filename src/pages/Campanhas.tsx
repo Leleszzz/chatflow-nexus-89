@@ -359,7 +359,7 @@ export default function Campanhas() {
               <div className="whitespace-pre-wrap text-sm">{renderTemplate(message, previewContext)}</div>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row">
               <Button variant="outline" className="flex-1" onClick={() => create(false)} disabled={busy}>
                 Salvar rascunho
               </Button>
