@@ -16,6 +16,7 @@ import Usuarios from "./pages/Usuarios";
 import Configuracoes from "./pages/Configuracoes";
 import Prontuarios from "./pages/Prontuarios";
 import Consultas from "./pages/Consultas";
+import Assistente from "./pages/Assistente";
 import Secretaria from "./pages/Secretaria";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound.tsx";
@@ -36,6 +37,7 @@ const App = () => (
           <Route path="/calendario" element={<RequireRole path="/calendario" title="Calendário"><Calendario /></RequireRole>} />
           <Route path="/prontuarios" element={<RequireRole path="/prontuarios" title="Prontuários"><Prontuarios /></RequireRole>} />
           <Route path="/consultas" element={<RequireRole path="/consultas" title="Consultas"><Consultas /></RequireRole>} />
+          <Route path="/assistente" element={<RequireRole path="/assistente" title="Assistente"><Assistente /></RequireRole>} />
           <Route path="/secretaria" element={<RequireRole path="/secretaria" title="Secretaria"><Secretaria /></RequireRole>} />
           <Route path="/agentes" element={<RequireRole path="/agentes" title="Agentes"><Agentes /></RequireRole>} />
           <Route path="/instancias" element={<RequireRole path="/instancias" title="Instâncias"><Instancias /></RequireRole>} />

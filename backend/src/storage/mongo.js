@@ -62,6 +62,9 @@ export const collections = {
   dealOutcomes: "deal_outcomes",
   auditoria: "auditoria",
   agentLocks: "agent_locks",
+  assistantThreads: "assistant_threads",
+  assistantMessages: "assistant_messages",
+  assistantUsage: "assistant_usage",
 };
 
 async function ensureIndexes() {
@@ -126,5 +129,9 @@ async function ensureIndexes() {
     getCol(collections.campaignTargets).createIndex({ campaignId: 1, status: 1 }),
     // Marcar resposta do cliente: busca pela conversa que acabou de responder.
     getCol(collections.campaignTargets).createIndex({ conversationId: 1, status: 1 }),
+    // Assistente do medico: a lista lateral e sempre "minhas conversas, recentes
+    // primeiro", e as mensagens sao lidas em ordem cronologica dentro da thread.
+    getCol(collections.assistantThreads).createIndex({ userId: 1, lastMessageAt: -1 }),
+    getCol(collections.assistantMessages).createIndex({ threadId: 1, createdAt: 1 }),
   ]);
 }

@@ -27,6 +27,7 @@ import { leadsRouter } from "./routes/leads.js";
 import { quickRepliesRouter } from "./routes/quick-replies.js";
 import { internalChatRouter } from "./routes/internal-chat.js";
 import { campaignsRouter } from "./routes/campaigns.js";
+import { assistantRouter } from "./routes/assistant.js";
 import { bindSocketHandlers } from "./socket/events.js";
 import { connectionManager } from "./whatsapp/ConnectionManager.js";
 import { startScheduledSender, stopScheduledSender } from "./whatsapp/scheduled-sender.js";
@@ -113,6 +114,7 @@ async function main() {
   app.use("/api/quick-replies", quickRepliesRouter);
   app.use("/api/internal-chat", internalChatRouter);
   app.use("/api/campaigns", campaignsRouter);
+  app.use("/api/assistant", assistantRouter);
 
   // Precisam vir DEPOIS de todas as rotas.
   app.use("/api", notFoundHandler);

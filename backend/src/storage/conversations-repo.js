@@ -178,6 +178,22 @@ function maisRelevante(convs) {
 }
 
 /**
+ * Aplica o recorte de instâncias a um filtro do Mongo.
+ *
+ * `null`/`undefined` é "sem recorte" — é o que `allowedInstanceIdsForRequest`
+ * devolve para admin, que enxerga todas. Uma lista restringe; a lista vazia é
+ * tratada pelo chamador, porque um `$in: []` silencioso esconde a intenção.
+ *
+ * Pura e exportada para poder ser testada: até esta função existir,
+ * findConversationByDealId ACEITAVA `instanceIds` e o ignorava, e a rota
+ * /by-deal passava o recorte achando que ele valia.
+ */
+export function comRecorteDeInstancia(filtro, instanceIds) {
+  if (!Array.isArray(instanceIds)) return filtro;
+  return { ...filtro, instanceId: { $in: instanceIds } };
+}
+
+/**
  * A conversa de WhatsApp de um card do CRM.
  *
  * Existe porque uma consulta gravada só guarda `dealId`, e mandar mensagem exige
@@ -190,11 +206,14 @@ function maisRelevante(convs) {
  * sem isto a consulta de um cliente que claramente tem conversa dizia que não
  * tinha.
  */
-export async function findConversationByDealId(dealId, { phone } = {}) {
+export async function findConversationByDealId(dealId, { phone, instanceIds } = {}) {
   if (!dealId) return null;
+  // Recorte vazio é "nenhuma instância permitida", não "todas": devolver a
+  // conversa aqui entregaria ao doutor o número da secretária.
+  if (Array.isArray(instanceIds) && instanceIds.length === 0) return null;
 
   const vinculadas = await col()
-    .find({ "crm.dealId": String(dealId), archivedAt: null }, { projection: { _id: 0 } })
+    .find(comRecorteDeInstancia({ "crm.dealId": String(dealId), archivedAt: null }, instanceIds), { projection: { _id: 0 } })
     .toArray();
   if (vinculadas.length) return maisRelevante(vinculadas);
 
@@ -206,7 +225,10 @@ export async function findConversationByDealId(dealId, { phone } = {}) {
   // 8 dígitos, então escapar não é necessário — mas a âncora é.
   const candidatas = await col()
     .find(
-      { archivedAt: null, isGroup: false, chatId: { $regex: `${chave}(:[0-9]+)?@` } },
+      comRecorteDeInstancia(
+        { archivedAt: null, isGroup: false, chatId: { $regex: `${chave}(:[0-9]+)?@` } },
+        instanceIds,
+      ),
       { projection: { _id: 0 } },
     )
     .limit(200)

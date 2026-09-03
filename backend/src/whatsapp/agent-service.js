@@ -25,20 +25,15 @@ import { listCustomFields, applyCustomFieldValues } from "../storage/custom-fiel
 import { patchDeal } from "../storage/deals-repo.js";
 import { emitDealEvent } from "../socket/events.js";
 import { callOpenAI } from "../lib/openai.js";
+import { MODEL_MAP, DEFAULT_OPENAI_MODEL, PRICING, priceFor } from "../lib/openai-pricing.js";
 import { listConsultations } from "../storage/consultations-repo.js";
 import { isAlreadyAnswered } from "../routes/agent-dedupe.js";
 import { HttpError } from "../middleware/error-handler.js";
 
-// Os três níveis que a tela de agentes oferece. Configurável por ambiente para
-// trocar de modelo sem mexer no código — a tabela de preço abaixo precisa ser
-// atualizada junto, porque é dela que sai o custo mostrado ao usuário.
-export const MODEL_MAP = {
-  econom: process.env.OPENAI_MODEL_ECONOM || "gpt-4o-mini",
-  balanced: process.env.OPENAI_MODEL_BALANCED || "gpt-4o",
-  premium: process.env.OPENAI_MODEL_PREMIUM || "gpt-4.1",
-};
-
-export const DEFAULT_OPENAI_MODEL = MODEL_MAP.econom;
+// Níveis de modelo e tabela de preço saíram para lib/openai-pricing.js quando o
+// assistente do médico passou a precisar dos mesmos números. Reexportados aqui
+// porque routes/agents.js já os importava deste arquivo.
+export { MODEL_MAP, DEFAULT_OPENAI_MODEL, PRICING, priceFor };
 
 // Teto de saída por resposta. A API não recebia limite nenhum: uma conversa que
 // induzisse o modelo a divagar gerava (e cobrava) uma resposta gigante, que o
@@ -56,16 +51,6 @@ export const skippedRespond = model => ({
   scheduling: null,
   extracted: null,
 });
-
-// Preço por token, em dólar. Fica em tabela nomeada para ficar óbvio quando
-// desatualiza — o custo mostrado ao usuário sai daqui.
-const PRICING = {
-  "gpt-4o-mini": { in: 0.15 / 1e6, out: 0.60 / 1e6 },
-  "gpt-4o":      { in: 2.50 / 1e6, out: 10.00 / 1e6 },
-  "gpt-4.1":     { in: 2.00 / 1e6, out: 8.00 / 1e6 },
-  "gpt-4.1-mini": { in: 0.40 / 1e6, out: 1.60 / 1e6 },
-  "gpt-4-turbo": { in: 10.00 / 1e6, out: 30.00 / 1e6 },
-};
 
 const SCHEDULING_REPLY =
   "Vou verificar os horários disponíveis na nossa agenda e te retorno com as opções em instantes.";
@@ -130,20 +115,6 @@ async function consultationContext(dealId) {
     console.warn(`[agent-service] contexto de consulta indisponível: ${err.message}`);
     return "";
   }
-}
-
-function priceFor(model, usage) {
-  const p = PRICING[model];
-  if (!usage) return 0;
-  if (!p) {
-    // Modelo trocado por ambiente sem entrada na tabela: o custo apareceria como
-    // zero e o relatório mentiria calado. Melhor avisar.
-    console.warn(`[agent-service] sem preço cadastrado para "${model}" — custo será reportado como 0`);
-    return 0;
-  }
-  const pIn = Number(usage.prompt_tokens) || 0;
-  const pOut = Number(usage.completion_tokens) || 0;
-  return pIn * p.in + pOut * p.out;
 }
 
 function pad2(n) {

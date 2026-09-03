@@ -5,6 +5,7 @@ import {
 import { getDeal } from "../storage/deals-repo.js";
 import { listUsers } from "../storage/users-repo.js";
 import { canUserSeeDeal, permittedUserIds } from "../lib/deal-permissions.js";
+import { podeVerTarefa, podeEscreverTarefa } from "../lib/task-permissions.js";
 import { requireAuth } from "../middleware/require-auth.js";
 import { isAdmin, seesAllDeals } from "../lib/roles.js";
 import { emitToUsers } from "../socket/events.js";
@@ -13,37 +14,16 @@ export const tasksRouter = Router();
 // Os três cargos usam: o doutor delega, a secretária executa, o admin vê tudo.
 tasksRouter.use(requireAuth());
 
-/**
- * Quem enxerga esta tarefa.
- *
- * Admin e secretária veem tudo (é a fila de trabalho delas, e `seesAllDeals` já
- * diz isso do cargo). O doutor vê a que ele criou, a que é dele, e a dos
- * pacientes que ele atende — assim ele acompanha se a cobrança que pediu saiu,
- * sem enxergar a agenda administrativa inteira.
- */
+// A regra em si vive em lib/task-permissions.js (pura, testada, compartilhada
+// com o assistente). Aqui fica só o que ela não pode fazer: ir ao banco buscar
+// o card. Evita carregar o deal quando o cargo já decide sozinho.
 async function podeVer(user, task) {
-  if (seesAllDeals(user)) return true;
-  if (task.assigneeId && task.assigneeId === user.id) return true;
-  if (task.criadoPor && task.criadoPor === user.id) return true;
+  if (podeVerTarefa(user, task, null)) return true;
   if (!task.dealId) return false;
-  const deal = await getDeal(task.dealId);
-  return Boolean(deal) && canUserSeeDeal(user, deal);
+  return podeVerTarefa(user, task, await getDeal(task.dealId));
 }
 
-/**
- * Pode mexer nesta tarefa?
- *
- * A recepção trabalha em fila compartilhada — uma secretária cobre a outra na
- * folga e no almoço, e travar cada tarefa na dona faria a fila parar sozinha.
- * Admin e secretária mexem em tudo; o doutor, no que é dele ou no que ele
- * mesmo delegou.
- */
-function podeEscrever(user, task) {
-  if (seesAllDeals(user)) return true;
-  if (task.assigneeId && task.assigneeId === user.id) return true;
-  if (task.criadoPor && task.criadoPor === user.id) return true;
-  return false;
-}
+const podeEscrever = podeEscreverTarefa;
 
 /**
  * Para quem o evento vai.

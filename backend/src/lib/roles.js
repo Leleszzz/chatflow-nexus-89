@@ -18,6 +18,17 @@ export const ROLE_LABELS = {
   [ROLES.SECRETARIA]: "Secretária",
 };
 
+/**
+ * O cargo escrito para uma pessoa ler. Espelha roleLabel de src/lib/roles.ts.
+ *
+ * Existe no backend porque o assistente monta texto — o prompt diz com quem está
+ * falando, e a lista da equipe mostra o cargo de cada um. Passar o valor cru
+ * ("secretaria") daria uma resposta em jargão de banco.
+ */
+export function roleLabel(value) {
+  return ROLE_LABELS[normalizeRole(value)];
+}
+
 // Cargos da era "CRM de vendas". Nada é promovido para admin por acidente:
 // qualquer coisa desconhecida vira secretaria, o cargo de menor privilégio útil.
 const CARGOS_LEGADOS = {

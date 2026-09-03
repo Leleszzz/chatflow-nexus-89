@@ -333,6 +333,84 @@ export type UserRecord = {
   receivesNewLeads?: boolean;
 };
 
+// ---- Assistente do médico ----
+// Espelham os shapes de backend/src/storage/assistant-repo.js e
+// backend/src/assistant/propostas.js — os dois lados precisam ser alterados
+// juntos, como já vale para roles e instance-kinds.
+
+export type AssistantEntrada = "texto" | "voz";
+
+export type TipoProposta =
+  | "criar_agendamento"
+  | "remarcar_agendamento"
+  | "cancelar_agendamento"
+  | "enviar_whatsapp"
+  | "agendar_whatsapp"
+  | "criar_tarefa"
+  | "mensagem_interna";
+
+export type StatusProposta = "pendente" | "confirmada" | "recusada" | "falhou";
+
+export type AssistantRequisito = { chave: string; ok: boolean; aviso: string };
+
+export type AssistantProposal = {
+  id: string;
+  tipo: TipoProposta;
+  titulo: string;
+  resumo: string;
+  payload: Record<string, unknown>;
+  requisitos: AssistantRequisito[];
+  preview: { texto: string; linhas: { rotulo: string; valor: string }[] };
+  status: StatusProposta;
+  resultado: { em: string; refTipo: string; refId: string; detalhe: string } | null;
+  erro: string;
+  geradoEm: string;
+  decididoEm: string;
+};
+
+export type AssistantPasso = { tool: string; resumo: string; ok: boolean; ms: number };
+
+export type AssistantUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  costUsd: number;
+  calls: number;
+};
+
+export type AssistantMessage = {
+  id: string;
+  threadId: string;
+  userId: string;
+  role: "user" | "assistant";
+  body: string;
+  createdAt: string;
+  entrada?: AssistantEntrada;
+  modelo?: string;
+  passos?: AssistantPasso[];
+  propostas?: AssistantProposal[];
+  usage?: AssistantUsage;
+  interrompido?: boolean;
+  erro?: string;
+};
+
+export type AssistantThread = {
+  id: string;
+  userId: string;
+  titulo: string;
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt: string | null;
+  totalMensagens: number;
+  usage: AssistantUsage;
+  arquivadoEm: string | null;
+};
+
+export type AssistantTurn = {
+  pergunta: AssistantMessage;
+  resposta: AssistantMessage;
+  thread: AssistantThread;
+};
+
 // A sessão vive num cookie httpOnly: o navegador anexa sozinho em toda
 // requisição de mesma origem, desde que `credentials` esteja ligado. Não há
 // mais token em JavaScript — nem para ler, nem para guardar.
@@ -932,4 +1010,49 @@ export const whatsappApi = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
+
+  // ---- Assistente do médico ----
+  listAssistantThreads: () => request<AssistantThread[]>("/api/assistant/threads"),
+  createAssistantThread: (titulo?: string) =>
+    request<AssistantThread>("/api/assistant/threads", { method: "POST", body: JSON.stringify({ titulo }) }),
+  deleteAssistantThread: (id: string) =>
+    request<{ ok: true }>(`/api/assistant/threads/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  listAssistantMessages: (threadId: string, params: { before?: string; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.before) qs.set("before", params.before);
+    if (params.limit) qs.set("limit", String(params.limit));
+    const sufixo = qs.toString() ? `?${qs}` : "";
+    return request<AssistantMessage[]>(`/api/assistant/threads/${encodeURIComponent(threadId)}/messages${sufixo}`);
+  },
+  sendAssistantMessage: (threadId: string, body: string, entrada: AssistantEntrada = "texto") =>
+    request<AssistantTurn>(`/api/assistant/threads/${encodeURIComponent(threadId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ body, entrada }),
+    }),
+  confirmAssistantProposal: (threadId: string, messageId: string, propostaId: string, edicao?: Record<string, unknown>) =>
+    request<{ mensagem: AssistantMessage }>(
+      `/api/assistant/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(messageId)}`
+      + `/propostas/${encodeURIComponent(propostaId)}/confirmar`,
+      { method: "POST", body: JSON.stringify({ edicao }) },
+    ),
+  refuseAssistantProposal: (threadId: string, messageId: string, propostaId: string) =>
+    request<{ mensagem: AssistantMessage }>(
+      `/api/assistant/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(messageId)}`
+      + `/propostas/${encodeURIComponent(propostaId)}/recusar`,
+      { method: "POST" },
+    ),
+  // FormData não pode levar Content-Type: application/json, então não passa pelo
+  // `request` — mesmo caminho de uploadProntuario.
+  transcribeAssistantAudio: async (file: File): Promise<{ texto: string }> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/api/assistant/transcribe", {
+      ...withCredentials,
+      method: "POST",
+      headers: cabecalhosCsrf(),
+      body: form,
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
 };

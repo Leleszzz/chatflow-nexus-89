@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { connectionManager } from "../whatsapp/ConnectionManager.js";
 import { saveMedia } from "../storage/media-repo.js";
 import { finalizeOutgoingMessage } from "../whatsapp/outgoing.js";
+import { enviarTexto } from "../whatsapp/enviar-texto.js";
 import { convertToOggOpus, isOggOpus } from "../whatsapp/audio-convert.js";
 import { cancelDueToAgentReply } from "../storage/scheduled-messages-repo.js";
 import { emitToInstance } from "../socket/events.js";
@@ -42,8 +43,16 @@ sendRouter.post("/:id/send", requireAuth(), requireInstanceAccess(), upload.sing
     let isVoiceNote = false; // áudio como nota de voz (ptt) vs arquivo de áudio comum
     if (type === "text") {
       if (!body) return res.status(400).json({ error: "body é obrigatório para text" });
-      result = await client.sendMessage(chatId, { text: body });
-    } else if (type === "image" || type === "audio" || type === "document" || type === "video") {
+      // O caminho de texto vive em whatsapp/enviar-texto.js — o assistente do
+      // médico envia por lá, sem passar por HTTP. Ele já finaliza a mensagem e
+      // cancela as programadas, então esta rota devolve e sai.
+      const enviado = await enviarTexto({
+        io: req.app.get("io"), instanceId, chatId, body, logLabel: "send",
+      });
+      return res.json({ ok: true, ...enviado });
+    }
+
+    if (type === "image" || type === "audio" || type === "document" || type === "video") {
       if (!req.file) return res.status(400).json({ error: "file é obrigatório" });
       let buffer = await fs.readFile(req.file.path);
       let mimeType = req.file.mimetype || "application/octet-stream";
@@ -113,7 +122,9 @@ sendRouter.post("/:id/send", requireAuth(), requireInstanceAccess(), upload.sing
     res.json({ ok: true, messageId, timestamp });
   } catch (err) {
     console.error("[send] failed:", err);
-    res.status(500).json({ error: err.message });
+    // enviarTexto lança HttpError com status próprio (instância offline é 404,
+    // não falha do servidor). Erro sem status continua sendo 500.
+    res.status(Number(err.status) || 500).json({ error: err.message, code: err.code });
   } finally {
     if (req.file) {
       fs.unlink(req.file.path).catch(() => {});

@@ -20,6 +20,10 @@ export const ACOES = {
   ALTERAR_USUARIO: "alterar_usuario",
   ALTERAR_CHAVE_API: "alterar_chave_api",
   PAREAR_INSTANCIA: "parear_instancia",
+  // O assistente do medico executa acao em nome dele. Sem esta linha, a
+  // mensagem que ele confirmou sai indistinguivel de uma que ele digitou, e
+  // "quem mandou isso para o paciente?" fica sem resposta.
+  EXECUTAR_ACAO_IA: "executar_acao_ia",
 };
 
 export async function registrar(req, acao, detalhe = {}) {

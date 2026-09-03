@@ -126,6 +126,9 @@ export const ROUTE_ROLES: Record<string, Role[]> = {
   "/secretaria": [ROLES.ADMIN, ROLES.SECRETARIA, ROLES.DOUTOR],
   "/prontuarios": [ROLES.ADMIN, ROLES.DOUTOR],
   "/consultas": [ROLES.ADMIN, ROLES.DOUTOR],
+  // O assistente le transcricao e prontuario: mesmo gate de /consultas.
+  // Espelha requireAuth({ roles: [ADMIN, DOUTOR] }) de routes/assistant.js.
+  "/assistente": [ROLES.ADMIN, ROLES.DOUTOR],
   "/agentes": [ROLES.ADMIN],
   "/campanhas": [ROLES.ADMIN],
   "/instancias": [ROLES.ADMIN],

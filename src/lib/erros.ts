@@ -23,6 +23,10 @@ const MENSAGENS: Record<string, string> = {
   SEM_CHAVE_OPENAI: "A chave da OpenAI não está configurada. Peça a um administrador em Configurações.",
   RESPOSTA_VAZIA: "A IA não conseguiu gerar uma resposta. Tente novamente.",
   SEM_CONTEXTO: "Não há mensagens suficientes nesta conversa para a IA responder.",
+  SEM_CHAVE_TRANSCRICAO: "A chave de transcrição não está configurada. Peça a um administrador em Configurações.",
+  AUDIO_VAZIO: "Não consegui entender o áudio. Fale de novo, mais perto do microfone.",
+  PROPOSTA_JA_DECIDIDA: "Esta ação já foi confirmada ou recusada.",
+  THREAD_NAO_ENCONTRADA: "Esta conversa não existe mais.",
 
   // Envio e arquivos
   ARQUIVO_GRANDE: "O arquivo é maior que o limite permitido.",

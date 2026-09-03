@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { escaparRegex } from "../src/storage/conversations-repo.js";
+import { escaparRegex, comRecorteDeInstancia } from "../src/storage/conversations-repo.js";
 
 // A busca de conversas passou a acontecer NO BANCO (antes o front baixava tudo
 // e filtrava em memória, o que só funcionava porque tudo estava carregado).
@@ -47,4 +47,32 @@ test("barra invertida é escapada", () => {
   // Sem escapar, "\d" viraria a classe de dígitos e casaria com "5".
   assert.equal(new RegExp(escapado).test("5"), false);
   assert.equal(new RegExp(escapado).test(barra + "d"), true);
+});
+
+// --- recorte de instância ---
+//
+// findConversationByDealId ACEITAVA `instanceIds` e o descartava, enquanto
+// routes/conversations.js o passava achando que valia (o comentário de lá diz,
+// com todas as letras, que sem o recorte o doutor recebe a conversa da
+// secretária num número em que ele nem consegue enviar). O assistente do médico
+// depende dessa mesma função para achar por onde falar com o paciente.
+
+test("sem recorte o filtro passa intacto", () => {
+  const base = { "crm.dealId": "d-1", archivedAt: null };
+  // `null` é o que allowedInstanceIdsForRequest devolve para admin: vê todas.
+  assert.deepEqual(comRecorteDeInstancia(base, null), base);
+  assert.deepEqual(comRecorteDeInstancia(base, undefined), base);
+});
+
+test("lista de instâncias vira $in sem perder o filtro original", () => {
+  const filtro = comRecorteDeInstancia({ archivedAt: null, isGroup: false }, ["wa-1", "wa-2"]);
+  assert.deepEqual(filtro.instanceId, { $in: ["wa-1", "wa-2"] });
+  assert.equal(filtro.archivedAt, null);
+  assert.equal(filtro.isGroup, false);
+});
+
+test("recorte não modifica o filtro recebido", () => {
+  const base = { archivedAt: null };
+  comRecorteDeInstancia(base, ["wa-1"]);
+  assert.equal(base.instanceId, undefined, "o filtro original foi mutado");
 });

@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Kanban, MessageSquare, CalendarDays, Bot, BarChart3, Settings, Sparkles, Smartphone, Megaphone, Users, UsersRound, X, FolderOpen, Stethoscope, ClipboardList } from "lucide-react";
+import { LayoutDashboard, Kanban, MessageSquare, CalendarDays, Bot, BarChart3, Settings, Sparkles, Smartphone, Megaphone, Users, UsersRound, X, FolderOpen, Stethoscope, ClipboardList, BrainCircuit } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useCRM } from "@/store/crm-store";
 import { canRoleAccess } from "@/lib/roles";
@@ -17,6 +17,9 @@ const sections: {
     items: [
       { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
       { to: "/conversas", label: "Conversas", icon: MessageSquare },
+      // BrainCircuit e nao Sparkles: Sparkles ja e o logo do app no topo
+      // desta mesma barra, e dois brilhos iguais confundem.
+      { to: "/assistente", label: "Assistente", icon: BrainCircuit },
       { to: "/equipe", label: "Equipe", icon: UsersRound },
       { to: "/kanban", label: "Kanban", icon: Kanban },
       { to: "/calendario", label: "Calendário", icon: CalendarDays },

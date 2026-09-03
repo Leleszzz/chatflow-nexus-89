@@ -28,3 +28,29 @@ export function normalizeInstanceKind(value) {
 export function isValidInstanceKind(value) {
   return INSTANCE_KIND_VALUES.includes(String(value ?? "").trim());
 }
+
+/**
+ * A instância pessoal de um usuário: marcada como "doutor" E com ele de
+ * responsável. As duas condições importam — o número da recepção também tem
+ * responsável, e sem o tipo a secretária ganharia um "meu WhatsApp" apontando
+ * para o número compartilhado.
+ */
+export function instanciaPropria(instances, userId) {
+  if (!userId) return null;
+  return (instances || []).find(
+    i => normalizeInstanceKind(i?.tipo) === INSTANCE_KINDS.DOUTOR && i?.ownerId === userId,
+  ) || null;
+}
+
+/**
+ * O número oficial da clínica — por onde a secretaria cobra exames e confirma
+ * consulta. É o padrão do que o assistente propõe enviar: cobrança saindo do
+ * WhatsApp pessoal do doutor mistura o administrativo com o clínico.
+ */
+export function instanciaDaSecretaria(instances) {
+  const daSecretaria = (instances || []).filter(
+    i => normalizeInstanceKind(i?.tipo) === INSTANCE_KINDS.SECRETARIA,
+  );
+  // Conectada na frente: mandar por uma instância desligada só produz erro.
+  return daSecretaria.find(i => i?.status === "ativa") || daSecretaria[0] || null;
+}

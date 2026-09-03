@@ -81,6 +81,7 @@ describe("canRoleAccess", () => {
     "/secretaria": [ROLES.ADMIN, ROLES.SECRETARIA, ROLES.DOUTOR],
     "/prontuarios": [ROLES.ADMIN, ROLES.DOUTOR],
     "/consultas": [ROLES.ADMIN, ROLES.DOUTOR],
+    "/assistente": [ROLES.ADMIN, ROLES.DOUTOR],
     "/agentes": [ROLES.ADMIN],
     "/campanhas": [ROLES.ADMIN],
     "/instancias": [ROLES.ADMIN],
@@ -104,6 +105,8 @@ describe("canRoleAccess", () => {
   it("os negativos importantes", () => {
     expect(canRoleAccess(ROLES.SECRETARIA, "/consultas")).toBe(false);
     expect(canRoleAccess(ROLES.SECRETARIA, "/prontuarios")).toBe(false);
+    // O assistente le transcricao e prontuario: mesmo veto.
+    expect(canRoleAccess(ROLES.SECRETARIA, "/assistente")).toBe(false);
     expect(canRoleAccess(ROLES.DOUTOR, "/usuarios")).toBe(false);
     expect(canRoleAccess(ROLES.DOUTOR, "/instancias")).toBe(false);
   });
